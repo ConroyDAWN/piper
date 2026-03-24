@@ -1,0 +1,36 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from agx_arm_msgs/msg/MoveMITMsg.msg
+// generated code does not contain a copyright notice
+
+
+module agx_arm_msgs {
+  module msg {
+    @verbatim (language="comment", text=
+      "This message contains the joint position, velocity, and torque control values for a single joint.")
+    struct MoveMITMsg {
+      @verbatim (language="comment", text=
+        "Index of the joint to control")
+      sequence<int32> joint_index;
+
+      @verbatim (language="comment", text=
+        "Desired joint position in radians")
+      sequence<double> p_des;
+
+      @verbatim (language="comment", text=
+        "Desired joint velocity in radians/second")
+      sequence<double> v_des;
+
+      @verbatim (language="comment", text=
+        "Position gain")
+      sequence<double> kp;
+
+      @verbatim (language="comment", text=
+        "Velocity gain")
+      sequence<double> kd;
+
+      @verbatim (language="comment", text=
+        "Desired joint torque in N/m")
+      sequence<double> torque;
+    };
+  };
+};

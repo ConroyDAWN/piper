@@ -1,0 +1,69 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from agx_arm_msgs/msg/HandStatus.msg
+// generated code does not contain a copyright notice
+
+#include "std_msgs/msg/Header.idl"
+
+module agx_arm_msgs {
+  module msg {
+    @verbatim (language="comment", text=
+      "Revo2 dexterous hand status feedback message")
+    struct HandStatus {
+      std_msgs::msg::Header header;
+
+      @verbatim (language="comment", text=
+        "Hand type flag: 1=left hand, 2=right hand")
+      uint8 left_or_right;
+
+      @verbatim (language="comment", text=
+        "Finger positions [0, 100]" "\n"
+        "Thumb tip position")
+      uint8 thumb_tip_pos;
+
+      @verbatim (language="comment", text=
+        "Thumb base position")
+      uint8 thumb_base_pos;
+
+      @verbatim (language="comment", text=
+        "Index finger position")
+      uint8 index_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Middle finger position")
+      uint8 middle_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Ring finger position")
+      uint8 ring_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Pinky finger position")
+      uint8 pinky_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Finger motor status: 0=idle, 1=running, 2=blocked" "\n"
+        "Thumb tip motor status")
+      uint8 thumb_tip_status;
+
+      @verbatim (language="comment", text=
+        "Thumb base motor status")
+      uint8 thumb_base_status;
+
+      @verbatim (language="comment", text=
+        "Index finger motor status")
+      uint8 index_finger_status;
+
+      @verbatim (language="comment", text=
+        "Middle finger motor status")
+      uint8 middle_finger_status;
+
+      @verbatim (language="comment", text=
+        "Ring finger motor status")
+      uint8 ring_finger_status;
+
+      @verbatim (language="comment", text=
+        "Pinky finger motor status")
+      uint8 pinky_finger_status;
+    };
+  };
+};

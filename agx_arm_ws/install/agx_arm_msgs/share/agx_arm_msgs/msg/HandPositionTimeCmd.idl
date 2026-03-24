@@ -1,0 +1,63 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from agx_arm_msgs/msg/HandPositionTimeCmd.msg
+// generated code does not contain a copyright notice
+
+
+module agx_arm_msgs {
+  module msg {
+    @verbatim (language="comment", text=
+      "Revo2 dexterous hand position/time hybrid control message" "\n"
+      "For position_time_ctrl(), sends position and arrival time together")
+    struct HandPositionTimeCmd {
+      @verbatim (language="comment", text=
+        "Target positions for each finger [0, 100]" "\n"
+        "Thumb tip position")
+      int8 thumb_tip_pos;
+
+      @verbatim (language="comment", text=
+        "Thumb base position")
+      int8 thumb_base_pos;
+
+      @verbatim (language="comment", text=
+        "Index finger position")
+      int8 index_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Middle finger position")
+      int8 middle_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Ring finger position")
+      int8 ring_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Pinky finger position")
+      int8 pinky_finger_pos;
+
+      @verbatim (language="comment", text=
+        "Arrival time for each finger (unit: 10ms, range: [0, 255], e.g. 200 = 2 seconds)" "\n"
+        "Thumb tip arrival time")
+      uint8 thumb_tip_time;
+
+      @verbatim (language="comment", text=
+        "Thumb base arrival time")
+      uint8 thumb_base_time;
+
+      @verbatim (language="comment", text=
+        "Index finger arrival time")
+      uint8 index_finger_time;
+
+      @verbatim (language="comment", text=
+        "Middle finger arrival time")
+      uint8 middle_finger_time;
+
+      @verbatim (language="comment", text=
+        "Ring finger arrival time")
+      uint8 ring_finger_time;
+
+      @verbatim (language="comment", text=
+        "Pinky finger arrival time")
+      uint8 pinky_finger_time;
+    };
+  };
+};
