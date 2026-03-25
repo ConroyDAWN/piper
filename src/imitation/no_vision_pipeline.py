@@ -441,6 +441,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
             no_motion_counter = 0
             timeout_counter = 0
             dynamic_wait_motion_done = bool(args.wait_motion_done)
+            checkpoint_pose = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
             pose_cmd_count = 0
             pose_wait_timeout_count = 0
             move_p_fallback_count = 0
@@ -487,12 +488,15 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
                 if (i + 1) % 20 == 0 or i == len(actions) - 1:
                     pose_after = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
-                    move_norm = float(np.linalg.norm(pose_after[:3] - curr_pose[:3]))
+                    # no-wait 模式下，单步前后几乎同时读取，常出现“看似0位移”的误判。
+                    # 改为 checkpoint 位移（上次打印点到当前打印点）更贴近真实运动。
+                    move_norm = float(np.linalg.norm(pose_after[:3] - checkpoint_pose[:3]))
                     cmd_norm = float(np.linalg.norm(act[:3])) if act.shape[0] >= 3 else 0.0
                     if move_norm < args.motion_epsilon:
                         no_motion_counter += 1
                     else:
                         no_motion_counter = 0
+                    checkpoint_pose = pose_after
 
                     print(
                         f"[INFO] replay {i + 1}/{len(actions)} | "
@@ -689,3 +693,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# python src/imitation/no_vision_pipeline.py replay   --input data/demo_6d_001.hdf5   --episode-name demo_0   --period 0.05   --speed-percent 30   --exec-mode move_p   --no-wait-motion-done   --pos-step-max 0.05   --smooth-alpha 0.6   --no-try-joint-fallback
