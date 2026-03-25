@@ -371,6 +371,16 @@ def _send_pose_command(
         raise ValueError(f"unsupported exec_mode: {exec_mode}")
 
 
+def _send_joint_command(
+    arm: PiperArm,
+    joints: np.ndarray,
+    wait_motion_done: bool,
+    motion_timeout: float,
+) -> bool:
+    """发送关节目标（用于 tcp 回放无运动时的诊断/兜底）。"""
+    return bool(arm.move_j(joints.tolist(), wait=wait_motion_done, timeout=motion_timeout))
+
+
 def cmd_replay(args: argparse.Namespace) -> None:
     in_path = Path(args.input).expanduser().resolve()
     if not in_path.exists():
@@ -386,9 +396,12 @@ def cmd_replay(args: argparse.Namespace) -> None:
     with h5py.File(in_path, "r") as f:
         ep = f[f"data/{args.episode_name}"]
         actions = np.asarray(ep["actions"], dtype=np.float32)
+        obs_q = np.asarray(ep["obs/q"], dtype=np.float32) if "obs/q" in ep else None
 
         if args.max_steps > 0:
             actions = actions[: args.max_steps]
+            if obs_q is not None:
+                obs_q = obs_q[: args.max_steps]
 
         prev_action = None
         try:
@@ -426,6 +439,8 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
             print(f"[INFO] replay start, steps={len(actions)}")
             no_motion_counter = 0
+            timeout_counter = 0
+            dynamic_wait_motion_done = bool(args.wait_motion_done)
             for i, act in enumerate(actions):
                 act = _apply_deadband_and_scale(
                     act,
@@ -443,10 +458,11 @@ def cmd_replay(args: argparse.Namespace) -> None:
                     arm=arm,
                     pose_next=next_pose,
                     exec_mode=args.exec_mode,
-                    wait_motion_done=args.wait_motion_done,
+                    wait_motion_done=dynamic_wait_motion_done,
                     motion_timeout=args.motion_timeout,
                 )
-                if not move_ok and args.retry_nonblocking_on_timeout and args.wait_motion_done:
+                if not move_ok and args.retry_nonblocking_on_timeout and dynamic_wait_motion_done:
+                    timeout_counter += 1
                     print("[WARN] wait_motion_done 超时，自动重试一次 non-blocking 下发")
                     _send_pose_command(
                         arm=arm,
@@ -455,6 +471,12 @@ def cmd_replay(args: argparse.Namespace) -> None:
                         wait_motion_done=False,
                         motion_timeout=args.motion_timeout,
                     )
+                    if timeout_counter >= args.timeout_switch_threshold:
+                        dynamic_wait_motion_done = False
+                        print(
+                            "[WARN] 连续 wait 超时，后续自动切换为 no-wait 模式继续回放 "
+                            f"(threshold={args.timeout_switch_threshold})"
+                        )
                 prev_action = act
 
                 if (i + 1) % 20 == 0 or i == len(actions) - 1:
@@ -491,6 +513,15 @@ def cmd_replay(args: argparse.Namespace) -> None:
                             pose_fb = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
                             fb_move = float(np.linalg.norm(pose_fb[:3] - curr_pose[:3]))
                             print(f"[WARN] fallback measured_move={fb_move:.6f}")
+                        if args.try_joint_fallback and obs_q is not None and i < len(obs_q):
+                            print("[WARN] 尝试 joint fallback: 发送当前样本对应的 q 目标")
+                            joint_ok = _send_joint_command(
+                                arm=arm,
+                                joints=np.asarray(obs_q[i], dtype=np.float64),
+                                wait_motion_done=True,
+                                motion_timeout=max(args.motion_timeout, 2.0),
+                            )
+                            print(f"[WARN] joint fallback done, ok={joint_ok}")
 
                 time.sleep(args.period)
 
@@ -599,8 +630,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--motion-timeout", type=float, default=1.0, help="单步等待运动完成超时[s]")
     r.add_argument("--retry-nonblocking-on-timeout", action="store_true", default=True, help="wait 超时后自动 non-blocking 重试（默认开启）")
     r.add_argument("--no-retry-nonblocking-on-timeout", dest="retry_nonblocking_on_timeout", action="store_false", help="关闭超时重试")
+    r.add_argument("--timeout-switch-threshold", type=int, default=3, help="连续 wait 超时多少次后切 no-wait")
     r.add_argument("--try-fallback-move-p", action="store_true", default=True, help="连续无位移时尝试 move_p fallback（默认开启）")
     r.add_argument("--no-try-fallback-move-p", dest="try_fallback_move_p", action="store_false", help="关闭 move_p fallback")
+    r.add_argument("--try-joint-fallback", action="store_true", default=True, help="连续无位移时尝试用 obs/q 做 move_j 兜底（默认开启）")
+    r.add_argument("--no-try-joint-fallback", dest="try_joint_fallback", action="store_false", help="关闭 move_j 兜底")
     r.set_defaults(func=cmd_replay)
 
     m = sub.add_parser("make-config", help="生成 BC-RNN 配置模板")
@@ -619,11 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = build_parser()
-    # 兼容不同版本脚本参数差异：默认忽略未知参数并给出提示，
-    # 避免因为文档/脚本版本不一致导致命令直接失败。
-    args, unknown = parser.parse_known_args()
-    if unknown:
-        print(f"[WARN] 忽略未知参数: {unknown}")
+    args = parser.parse_args()
     args.func(args)
 
 

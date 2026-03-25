@@ -12,6 +12,8 @@ from piper_arm import PiperArm
 SAFE_METHODS: Set[str] = {
     "enable",
     "disable",
+    "reset",
+    "set_home",
     "go_home",
     "move_j",
     "move_js",

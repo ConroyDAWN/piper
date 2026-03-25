@@ -178,6 +178,27 @@ class PiperArm:
         self.robot.reset()
         time.sleep(sleep_after)
 
+    def set_home(
+        self,
+        timeout: float = 2.0,
+        disable_first: bool = True,
+        enable_after: bool = True,
+    ) -> bool:
+        """将当前 6 关节位置设置为零点。
+
+        注意：这是零点标定操作，不是运动到零位（go_home）。
+        """
+        if disable_first and (not self.disable(timeout=8.0)):
+            print("[WARN] disable timeout, continue calibrate")
+
+        ok = self.robot.calibrate_joint(joint_index=255, timeout=timeout)
+        if not ok:
+            return False
+
+        if enable_after:
+            return self.enable(timeout=8.0)
+        return True
+
     def e_stop(self, sleep_after: float = 1.0) -> None:
         """电子急停。"""
         self.robot.electronic_emergency_stop()
