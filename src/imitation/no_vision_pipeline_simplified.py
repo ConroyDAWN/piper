@@ -85,6 +85,8 @@ def wait_exit_teach_mode(arm: PiperArm, timeout_s: float) -> None:
     end_t = time.monotonic() + timeout_s
     while get_ctrl_mode(arm) == 2:
         if time.monotonic() > end_t:
+            # check_mode_later=get_ctrl_mode(arm)
+            # print(f"[WARN] 等待退出示教模式超时，当前 ctrl_mode={check_mode_later}")
             raise RuntimeError("退出示教模式超时，请手动退出示教后重试 ")
         time.sleep(0.01)
 
@@ -180,6 +182,7 @@ def ensure_home_then_confirm(
                 raise RuntimeError("第二次go_home 超时")
 
     if not is_near_home(arm, tol_rad=tol_rad):
+        arm.disable(timeout=1.0)
         raise RuntimeError("go_home 后仍未接近零位，请人工检查")
 
     input(prompt)
@@ -264,9 +267,10 @@ def cmd_collect(args: argparse.Namespace) -> None:
         # 前置检查---------------------------------
         try:
             # make sure home pos before collect
+
             ensure_home_then_confirm(
                 arm=arm,
-                tol_rad=0.05,
+                tol_rad=0.03,
                 home_speed_percent=20,
                 home_timeout=10,
                 prompt="[INFO] 已在零位。请进入示教模式后按回车继续",
@@ -284,7 +288,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         try:
             print(f"[INFO] start collect: action_dim={args.action_dim}, samples={args.samples}")
 
-            collect_freq=20  # 20Hz 采样频率，实测示教动作差分在这个频率下比较合适
+            collect_freq=100  # 100Hz 采样频率，实测示教动作差分在这个频率下比较合适
 
             # 为了构造 first sample，需要 2 帧
 
@@ -306,23 +310,31 @@ def cmd_collect(args: argparse.Namespace) -> None:
             print(f"[INFO] saved: {out_path}")
 
         finally: # 数据采集结束，机械臂仍处于示教模式；在点击取消示教模式之后，无法检测机械臂当前状态，无法发送指令。似乎只能直接退出。
-            print("[INFO] collect done")
-            input("[INFO] 手动退出示教模式，确认后按 Enter...")
-            exited_teach = False
+            input("[INFO] collect done， 请手动退出示教模式，确认后按回车，\n回车结束将会失能机械臂，请注意安全")
+       
+            arm.reset()
 
-            try:
-                wait_exit_teach_mode(arm, timeout_s=5) # 如果异常，会爆出 RuntimeError，就会执行except块
-                exited_teach = True
-                print("[INFO] 已确认退出示教模式")
-            except Exception as exc:
-                print(f"[WARN] 未确认退出示教模式，跳过 go_home: {exc}")
+            time.sleep(1)  # 等待机械臂状态更新，避免后续操作过快导致异常
+            # arm.disable()     
+            # time.sleep(0.5)  # 等待机械臂完全失能，确保安全
 
-            if exited_teach:
-                print("[INFO] 开始回零位")
-                ok = arm.go_home(wait=True, timeout=10)
-                print(f"[INFO] go_home done, ok={ok}")
-                if not ok:
-                    raise RuntimeError("go_home 超时，未能确认到达零位")
+            # try:
+            #     # check_mode=get_ctrl_mode(arm)
+            #     # print(f"[INFO] 当前 ctrl_mode: {check_mode}")
+            #     wait_exit_teach_mode(arm, timeout_s=5) # 如果异常，会爆出 RuntimeError，就会执行except块
+            #     exited_teach = True
+            #     print("[INFO] 已确认退出示教模式")
+            # except Exception as exc:
+            #     check_mode_later=get_ctrl_mode(arm)
+            #     # print(f"[WARN] 等待退出示教模式超时，当前 ctrl_mode={check_mode_later}")
+            #     print(f"[WARN] 未确认退出示教模式，跳过 go_home: {exc}")
+
+            # if exited_teach:
+            #     print("[INFO] 开始回零位")
+            #     ok = arm.go_home(wait=True, timeout=10)
+            #     print(f"[INFO] go_home done, ok={ok}")
+            #     if not ok:
+            #         raise RuntimeError("go_home 超时，未能确认到达零位")
 
 
 
@@ -348,7 +360,7 @@ def cmd_inspect(args: argparse.Namespace) -> None:
             print(f"obs/tcp_xyz shape   : {ep['obs/tcp_xyz'].shape}")
             print(f"obs/tcp_pose shape  : {ep['obs/tcp_pose'].shape}")
             print(f"actions shape       : {ep['actions'].shape}")
-            print(f"last_actions shape  : {ep['last_actions'].shape}")
+
 
 
 def _clip_action(action: np.ndarray, pos_step_max: float, rot_step_max: float) -> np.ndarray:
@@ -410,6 +422,7 @@ def _send_pose_command(
     exec_mode: str,
     wait_motion_done: bool,
     motion_timeout: float,
+    initial_sleep: float = 0.1,
 ) -> bool:
     """
     统一发送末端位姿命令。
@@ -420,19 +433,19 @@ def _send_pose_command(
     if exec_mode == "move_l":
         return bool(arm.move_l(pose_list, wait=wait_motion_done, timeout=motion_timeout))
     elif exec_mode == "move_p":
-        return bool(arm.move_p(pose_list, wait=wait_motion_done, timeout=motion_timeout))
+        return bool(arm.move_p(pose_list, wait=wait_motion_done, timeout=motion_timeout, initial_sleep=initial_sleep))
     else:
         raise ValueError(f"unsupported exec_mode: {exec_mode}")
 
 
-def _send_joint_command(
-    arm: PiperArm,
-    joints: np.ndarray,
-    wait_motion_done: bool,
-    motion_timeout: float,
-) -> bool:
-    """发送关节目标（用于 tcp 回放无运动时的诊断/兜底）。"""
-    return bool(arm.move_j(joints.tolist(), wait=wait_motion_done, timeout=motion_timeout))
+# def _send_joint_command(
+#     arm: PiperArm,
+#     joints: np.ndarray,
+#     wait_motion_done: bool,
+#     motion_timeout: float,
+# ) -> bool:
+#     """发送关节目标（用于 tcp 回放无运动时的诊断/兜底）。"""
+#     return bool(arm.move_j(joints.tolist(), wait=wait_motion_done, timeout=motion_timeout))
 
 
 def cmd_replay(args: argparse.Namespace) -> None:
@@ -452,178 +465,201 @@ def cmd_replay(args: argparse.Namespace) -> None:
         actions = np.asarray(ep["actions"], dtype=np.float32)
         obs_q = np.asarray(ep["obs/q"], dtype=np.float32) if "obs/q" in ep else None
 
+        # 默认0表示全回放，不限制
         if args.max_steps > 0:
             actions = actions[: args.max_steps]
             if obs_q is not None:
                 obs_q = obs_q[: args.max_steps]
 
         prev_action = None
+        # 前置内容------------------------------------------
         try:
             print(f"[INFO] connect: channel={args.channel}")
             arm.connect()
-            print_runtime_state(arm, "after_connect")
+            # print the state after connect
+            #print_runtime_state(arm, "after_connect")
 
-            if args.require_exit_teach_mode:
-                print("[INFO] 请确保已退出示教模式（回放需要非示教状态）")
-                wait_exit_teach_mode(arm, timeout_s=args.exit_teach_timeout)
-                print("[INFO] 已确认退出示教模式")
-                print_runtime_state(arm, "after_exit_teach_check")
+            print("[INFO] 请确保已退出示教模式（回放需要非示教状态）")
+            # wait_exit_teach_mode(arm, timeout_s=5)
+            # mode_replay = get_ctrl_mode(arm)
+            # if mode_replay==1:
+            #     print(f"[INFO] 已确认非示教模式，当前 ctrl_mode={mode_replay}")
+            # else:
+            #     print(f"[WARN] 当前 ctrl_mode={mode_replay}")
 
-            print("[INFO] enable")
-            if not arm.enable(timeout=8.0):
+            #print_runtime_state(arm, "exit_teach_check")
+
+            if not arm.enable(timeout=5.0):
                 raise RuntimeError("enable failed")
-            print_runtime_state(arm, "after_enable")
+            print("[INFO] enabled")
+            # print_runtime_state(arm, "enabled")
 
-            if args.require_non_teaching_after_enable:
-                wait_non_teaching_mode_after_enable(
-                    arm=arm,
-                    timeout_s=args.non_teaching_timeout,
-                )
-                print_runtime_state(arm, "after_non_teaching_check")
+            # if args.require_non_teaching_after_enable:
+            #     wait_non_teaching_mode_after_enable(
+            #         arm=arm,
+            #         timeout_s=args.non_teaching_timeout,
+            #     )
+            #     print_runtime_state(arm, "after_non_teaching_check")
 
-            arm.set_motion_mode_p()
-            arm.set_speed_percent(args.speed_percent)
-            print_runtime_state(arm, "after_set_mode_speed")
 
-            if args.ensure_home_before_replay:
-                ensure_home_then_confirm(
-                    arm=arm,
-                    tol_rad=args.home_tol_rad,
-                    home_speed_percent=args.home_speed_percent,
-                    home_timeout=args.home_timeout,
-                    prompt="[INFO] 已在零位。按回车开始回放",
-                    disable_after_home=False,
-                )
-                print_runtime_state(arm, "after_home_before_replay")
-
-            raw_norm = np.linalg.norm(actions[:, :3], axis=1) if actions.shape[1] >= 3 else np.zeros(len(actions))
-            print(
-                f"[INFO] raw action stats | mean={raw_norm.mean():.6f}, "
-                f"p95={np.percentile(raw_norm, 95):.6f}, max={raw_norm.max():.6f}"
+            # print_runtime_state(arm, "after_set_mode_speed")
+            
+            ensure_home_then_confirm(
+                arm=arm,
+                tol_rad=0.03,
+                home_speed_percent=20,
+                home_timeout=10,
+                prompt="[INFO] 已在零位。按回车开始回放",
             )
+        except Exception as exc:
+            print(f"[ERROR] 前置检查失败: {exc}")
+            return
+        
+        # replay the trajectory------------------------------------------
+        try:
+            print_runtime_state(arm, "after_home_before_replay")
 
-            print(f"[INFO] replay start, steps={len(actions)}")
-            no_motion_counter = 0
-            timeout_counter = 0
-            dynamic_wait_motion_done = bool(args.wait_motion_done)
-            checkpoint_pose = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
-            pose_cmd_count = 0
-            pose_wait_timeout_count = 0
-            move_p_fallback_count = 0
-            joint_fallback_count = 0
+            # 计算action的平均步长，判断过小or过大
+            # raw_norm = np.linalg.norm(actions[:, :3], axis=1) if actions.shape[1] >= 3 else np.zeros(len(actions))
+            # print(
+            #     f"[INFO] raw action stats | mean={raw_norm.mean():.6f}, "
+            #     f"p95={np.percentile(raw_norm, 95):.6f}, max={raw_norm.max():.6f}"
+            # )
+            # print(f"[INFO] replay start, steps={len(actions)}--------------")
+
+            # no_motion_counter = 0
+            # timeout_counter = 0
+            # 等待动作完成
+            # dynamic_wait_motion_done = True 
+            # checkpoint_pose = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
+            # pose_cmd_count = 0
+            # pose_wait_timeout_count = 0
+            # move_p_fallback_count = 0
+            # joint_fallback_count = 0
+            time0= time.time()
             for i, act in enumerate(actions):
+                # 过小的动作可能无法触发运动。通过死区和缩放调整到合适范围。
                 act = _apply_deadband_and_scale(
                     act,
-                    action_scale=args.action_scale,
-                    min_pos_step=args.min_pos_step,
-                    min_rot_step=args.min_rot_step,
+                    action_scale=1,
+                    min_pos_step=0.00001,
+                    min_rot_step=0.00001,
                 )
-                act = _clip_action(act, args.pos_step_max, args.rot_step_max)
-                act = _smooth_action(act, prev_action, args.smooth_alpha)
+                # 动作限幅，保护实机安全
+                act = _clip_action(act, 0.5, 0.5)
+
+                # 一阶低通平滑
+                act = _smooth_action(act, prev_action, 0.9)
 
                 curr_pose = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
                 next_pose = _compose_next_pose(curr_pose, act)
-
-                move_ok = _send_pose_command(
+                arm.set_motion_mode_p()
+                arm.set_speed_percent(100)
+                _send_pose_command(
                     arm=arm,
                     pose_next=next_pose,
-                    exec_mode=args.exec_mode,
-                    wait_motion_done=dynamic_wait_motion_done,
-                    motion_timeout=args.motion_timeout,
+                    exec_mode="move_p",
+                    wait_motion_done=False, # 等待反馈指令=0
+                    motion_timeout=0.2,
+                    initial_sleep=0.1,
                 )
-                pose_cmd_count += 1
-                if not move_ok and args.retry_nonblocking_on_timeout and dynamic_wait_motion_done:
-                    timeout_counter += 1
-                    pose_wait_timeout_count += 1
-                    print("[WARN] wait_motion_done 超时，自动重试一次 non-blocking 下发")
-                    _send_pose_command(
-                        arm=arm,
-                        pose_next=next_pose,
-                        exec_mode=args.exec_mode,
-                        wait_motion_done=False,
-                        motion_timeout=args.motion_timeout,
-                    )
-                    if timeout_counter >= args.timeout_switch_threshold:
-                        dynamic_wait_motion_done = False
-                        print(
-                            "[WARN] 连续 wait 超时，后续自动切换为 no-wait 模式继续回放 "
-                            f"(threshold={args.timeout_switch_threshold})"
-                        )
-                prev_action = act
+                # move_ok
+                # pose_cmd_count += 1
+                # 这里的move_ok指的是指令发送成功
+                # if not move_ok and dynamic_wait_motion_done:
+                #     timeout_counter += 1
+                #     pose_wait_timeout_count += 1
+                #     print("[WARN] wait_motion_done 超时，自动重试一次 non-blocking 下发")
+                #     _send_pose_command(
+                #         arm=arm,
+                #         pose_next=next_pose,
+                #         exec_mode="move_p",
+                #         wait_motion_done=False,
+                #         motion_timeout=1,
+                #     )
+                #     if timeout_counter >= 3:
+                #         dynamic_wait_motion_done = False
+                #         print(
+                #             "[WARN] 连续 wait 超时，后续自动切换为 no-wait 模式继续回放 "
+                #             f"(threshold={args.timeout_switch_threshold})"
+                #         )
+                # prev_action = act
 
-                if (i + 1) % 20 == 0 or i == len(actions) - 1:
-                    pose_after = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
-                    # no-wait 模式下，单步前后几乎同时读取，常出现“看似0位移”的误判。
-                    # 改为 checkpoint 位移（上次打印点到当前打印点）更贴近真实运动。
-                    move_norm = float(np.linalg.norm(pose_after[:3] - checkpoint_pose[:3]))
-                    cmd_norm = float(np.linalg.norm(act[:3])) if act.shape[0] >= 3 else 0.0
-                    if move_norm < args.motion_epsilon:
-                        no_motion_counter += 1
-                    else:
-                        no_motion_counter = 0
-                    checkpoint_pose = pose_after
+                # if (i + 1) % 20 == 0 or i == len(actions) - 1:
+                #     pose_after = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
+                #     # no-wait 模式下，单步前后几乎同时读取，常出现“看似0位移”的误判。
+                #     # 改为 checkpoint 位移（上次打印点到当前打印点）更贴近真实运动。
+                #     move_norm = float(np.linalg.norm(pose_after[:3] - checkpoint_pose[:3]))
+                #     cmd_norm = float(np.linalg.norm(act[:3])) if act.shape[0] >= 3 else 0.0
+                #     #判断无位移的阈值：
+                #     if move_norm < 0.0001:
+                #         no_motion_counter += 1
+                #     else:
+                #         no_motion_counter = 0
+                #     checkpoint_pose = pose_after
 
-                    print(
-                        f"[INFO] replay {i + 1}/{len(actions)} | "
-                        f"cmd_norm={cmd_norm:.6f}, measured_move={move_norm:.6f}, "
-                        f"no_motion_counter={no_motion_counter}"
-                    )
-                    print_runtime_state(arm, f"replay_step_{i+1}")
+                    # print(
+                    #     f"[INFO] replay {i + 1}/{len(actions)} | "
+                    #     f"cmd_norm={cmd_norm:.6f}, measured_move={move_norm:.6f}, "
+                    #     f"no_motion_counter={no_motion_counter}"
+                    # )
+                    # print_runtime_state(arm, f"replay_step_{i+1}")
 
-                    if no_motion_counter >= args.no_motion_warn_steps:
-                        print(
-                            "[WARN] 连续多次检测到“有指令但几乎无位移”。"
-                            "请检查：是否仍在示教模式、是否驱动已使能、"
-                            "碰撞保护是否触发、速度比例是否过低。"
-                        )
-                        if args.try_fallback_move_p:
-                            move_p_fallback_count += 1
-                            print("[WARN] 尝试 fallback: 使用 move_p + wait=True 发送一次当前目标位姿")
-                            _send_pose_command(
-                                arm=arm,
-                                pose_next=next_pose,
-                                exec_mode="move_p",
-                                wait_motion_done=True,
-                                motion_timeout=max(args.motion_timeout, 2.0),
-                            )
-                            pose_fb = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
-                            fb_move = float(np.linalg.norm(pose_fb[:3] - curr_pose[:3]))
-                            print(f"[WARN] fallback measured_move={fb_move:.6f}")
-                            if fb_move >= args.motion_epsilon:
-                                no_motion_counter = 0
-                        if args.try_joint_fallback and obs_q is not None and i < len(obs_q):
-                            joint_fallback_count += 1
-                            print("[WARN] 尝试 joint fallback: 发送当前样本对应的 q 目标")
-                            joint_ok = _send_joint_command(
-                                arm=arm,
-                                joints=np.asarray(obs_q[i], dtype=np.float64),
-                                wait_motion_done=True,
-                                motion_timeout=max(args.motion_timeout, 2.0),
-                            )
-                            print(f"[WARN] joint fallback done, ok={joint_ok}")
-                            if joint_ok:
-                                no_motion_counter = 0
+                    # if no_motion_counter >= 5:  # args.no_motion_warn_steps
+                    #     print(
+                    #         "[WARN] 连续多次检测到“有指令但几乎无位移”。"
+                    #         "请检查：是否仍在示教模式、是否驱动已使能、"
+                    #         "碰撞保护是否触发、速度比例是否过低。"
+                    #     )
+                    #     if args.try_fallback_move_p:
+                    #         move_p_fallback_count += 1
+                    #         print("[WARN] 尝试 fallback: 使用 move_p + wait=True 发送一次当前目标位姿")
+                    #         _send_pose_command(
+                    #             arm=arm,
+                    #             pose_next=next_pose,
+                    #             exec_mode="move_p",
+                    #             wait_motion_done=True,
+                    #             motion_timeout=max(1, 2.0),
+                    #         )
+                    #         pose_fb = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
+                    #         fb_move = float(np.linalg.norm(pose_fb[:3] - curr_pose[:3]))
+                    #         print(f"[WARN] fallback measured_move={fb_move:.6f}")
+                    #         if fb_move >= 0.0001:  # args.motion_epsilon
+                    #             no_motion_counter = 0
+                    #     if args.try_joint_fallback and obs_q is not None and i < len(obs_q):
+                    #         joint_fallback_count += 1
+                    #         print("[WARN] 尝试 joint fallback: 发送当前样本对应的 q 目标")
+                    #         joint_ok = _send_joint_command(
+                    #             arm=arm,
+                    #             joints=np.asarray(obs_q[i], dtype=np.float64),
+                    #             wait_motion_done=True,
+                    #             motion_timeout=max(1, 2.0),
+                    #         )
+                    #         print(f"[WARN] joint fallback done, ok={joint_ok}")
+                    #         if joint_ok:
+                    #             no_motion_counter = 0
 
-                time.sleep(args.period)
-
+                time.sleep(0.015)
+            time1 = time.time()
+            print(f"[INFO] replay finished, total_time={time1-time0:.2f}s")
             print("[INFO] replay done")
-            print(
-                "[INFO] replay summary | "
-                f"pose_cmd_count={pose_cmd_count}, "
-                f"pose_wait_timeout_count={pose_wait_timeout_count}, "
-                f"move_p_fallback_count={move_p_fallback_count}, "
-                f"joint_fallback_count={joint_fallback_count}"
-            )
+            # print(
+            #     "[INFO] replay summary | "
+            #     f"pose_cmd_count={pose_cmd_count}, "
+            #     f"pose_wait_timeout_count={pose_wait_timeout_count}, "
+            #     f"move_p_fallback_count={move_p_fallback_count}, "
+            #     f"joint_fallback_count={joint_fallback_count}"
+            # )
 
-            if args.go_home_after_replay:
-                print("[INFO] go home after replay")
-                arm.set_motion_mode_j()
-                arm.set_speed_percent(args.home_speed_percent)
-                home_ok = arm.go_home(wait=True, timeout=args.home_timeout)
-                print(f"[INFO] go_home done, ok={home_ok}")
+
+            print("[INFO] go home after replay")
+            arm.set_motion_mode_j()
+            arm.set_speed_percent(20)
+            home_ok = arm.go_home(wait=True, timeout=5)
+            print(f"[INFO] go_home done, ok={home_ok}")
 
         finally:
-            print("[INFO] disable")
+            print("[INFO] replay over")
         #     arm.disable(timeout=8.0)
 
 
@@ -677,9 +713,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("collect", help="采集并写入 HDF5")
-    c.add_argument("--output", default="data/demo_6d_006.hdf5")
+    c.add_argument("--output", default="data/demo_6d_010.hdf5")
     c.add_argument("--episode-name", default="demo_0")
-    c.add_argument("--samples", type=int, default=100)
+    c.add_argument("--samples", type=int, default=1000)
     # c.add_argument("--period", type=float, default=0.05) # 20HZ
     c.add_argument("--action-dim", type=int, default=6, choices=[3, 6])
     c.add_argument("--channel", default="can0")
@@ -693,8 +729,6 @@ def build_parser() -> argparse.ArgumentParser:
     #c.add_argument("--enable-before-collect", action="store_true", help="采集前先 enable（默认关闭，避免影响示教拖动）")
     #c.add_argument("--ensure-home-before-collect", action="store_true", default=True, help="采集前确保零位（默认开启）")
     #c.add_argument("--no-ensure-home-before-collect", dest="ensure_home_before_collect", action="store_false", help="关闭采集前零位检查")
-
-
     c.set_defaults(func=cmd_collect)
 
     i = sub.add_parser("inspect", help="检查 HDF5 数据结构")
@@ -709,39 +743,39 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--channel", default="can0")
     r.add_argument("--tool-type", default="none", choices=["none", "custom_tool", "agx_gripper", "revo2"])
     r.add_argument("--tcp-offset", default="[0,0,0,0,0,0]")
-    r.add_argument("--speed-percent", type=int, default=30)
-    r.add_argument("--action-scale", type=float, default=1.0, help="动作整体缩放系数；若不动可尝试 2~5")
-    r.add_argument("--min-pos-step", type=float, default=0.0, help="平移 deadband[m]，小于该值置零")
-    r.add_argument("--min-rot-step", type=float, default=0.0, help="旋转 deadband[rad]，小于该值置零")
-    r.add_argument("--pos-step-max", type=float, default=0.005, help="单步最大平移[m]")
-    r.add_argument("--rot-step-max", type=float, default=0.03, help="单步最大转角[rad]，action_dim=6 时使用")
-    r.add_argument("--smooth-alpha", type=float, default=0.6, help="低通系数，越大越平滑")
-    r.add_argument("--require-exit-teach-mode", action="store_true", default=True, help="回放前强制检查已退出示教（默认开启）")
+    #r.add_argument("--speed-percent", type=int, default=30)
+    #r.add_argument("--action-scale", type=float, default=4.0, help="动作整体缩放系数；若不动可尝试 2~5")
+    #r.add_argument("--min-pos-step", type=float, default=0.005, help="平移 deadband[m]，小于该值置零")
+    #r.add_argument("--min-rot-step", type=float, default=0.005, help="旋转 deadband[rad]，小于该值置零")
+    #r.add_argument("--pos-step-max", type=float, default=0.005, help="单步最大平移[m]")
+    #r.add_argument("--rot-step-max", type=float, default=0.03, help="单步最大转角[rad]，action_dim=6 时使用")
+    #r.add_argument("--smooth-alpha", type=float, default=0.6, help="低通系数，越大越平滑")
+    # r.add_argument("--require-exit-teach-mode", action="store_true", default=True, help="回放前强制检查已退出示教（默认开启）")
     r.add_argument("--no-require-exit-teach-mode", dest="require_exit_teach_mode", action="store_false", help="关闭退出示教检查")
-    r.add_argument("--exit-teach-timeout", type=float, default=10.0, help="等待退出示教超时[s]")
-    r.add_argument("--require-non-teaching-after-enable", action="store_true", default=True, help="enable 后再次检查不在示教模式（默认开启）")
-    r.add_argument("--no-require-non-teaching-after-enable", dest="require_non_teaching_after_enable", action="store_false", help="关闭 enable 后非示教检查")
+    # r.add_argument("--exit-teach-timeout", type=float, default=10.0, help="等待退出示教超时[s]")
+    #r.add_argument("--require-non-teaching-after-enable", action="store_true", default=True, help="enable 后再次检查不在示教模式（默认开启）")
+    #r.add_argument("--no-require-non-teaching-after-enable", dest="require_non_teaching_after_enable", action="store_false", help="关闭 enable 后非示教检查")
     r.add_argument("--non-teaching-timeout", type=float, default=2.0, help="enable 后等待退出示教的超时[s]")
-    r.add_argument("--ensure-home-before-replay", action="store_true", default=True, help="回放前确保零位（默认开启）")
+    #r.add_argument("--ensure-home-before-replay", action="store_true", default=True, help="回放前确保零位（默认开启）")
     r.add_argument("--no-ensure-home-before-replay", dest="ensure_home_before_replay", action="store_false", help="关闭回放前零位检查")
-    r.add_argument("--home-tol-rad", type=float, default=0.05, help="零位判定阈值[rad]")
-    r.add_argument("--motion-epsilon", type=float, default=1e-4, help="判定“几乎没动”的平移阈值[m]")
-    r.add_argument("--no-motion-warn-steps", type=int, default=5, help="连续多少次没动触发警告（每20步检查一次）")
+    #r.add_argument("--home-tol-rad", type=float, default=0.05, help="零位判定阈值[rad]")
+    #r.add_argument("--motion-epsilon", type=float, default=1e-4, help="判定“几乎没动”的平移阈值[m]")
+    #r.add_argument("--no-motion-warn-steps", type=int, default=5, help="连续多少次没动触发警告（每20步检查一次）")
     r.add_argument("--exec-mode", default="move_p", choices=["move_l", "move_p"], help="回放执行指令类型，默认 move_p（更稳）")
-    r.add_argument("--wait-motion-done", action="store_true", default=True, help="每步等待运动完成（默认开启）")
-    r.add_argument("--no-wait-motion-done", dest="wait_motion_done", action="store_false", help="关闭每步等待完成")
-    r.add_argument("--motion-timeout", type=float, default=1.0, help="单步等待运动完成超时[s]")
-    r.add_argument("--retry-nonblocking-on-timeout", action="store_true", default=True, help="wait 超时后自动 non-blocking 重试（默认开启）")
+    #r.add_argument("--wait-motion-done", action="store_true", default=True, help="每步等待运动完成（默认开启）")
+    #r.add_argument("--no-wait-motion-done", dest="wait_motion_done", action="store_false", help="关闭每步等待完成")
+    #r.add_argument("--motion-timeout", type=float, default=1.0, help="单步等待运动完成超时[s]")
+    #r.add_argument("--retry-nonblocking-on-timeout", action="store_true", default=True, help="wait 超时后自动 non-blocking 重试（默认开启）")
     r.add_argument("--no-retry-nonblocking-on-timeout", dest="retry_nonblocking_on_timeout", action="store_false", help="关闭超时重试")
-    r.add_argument("--timeout-switch-threshold", type=int, default=3, help="连续 wait 超时多少次后切 no-wait")
+    #r.add_argument("--timeout-switch-threshold", type=int, default=3, help="连续 wait 超时多少次后切 no-wait")
     r.add_argument("--try-fallback-move-p", action="store_true", default=True, help="连续无位移时尝试 move_p fallback（默认开启）")
     r.add_argument("--no-try-fallback-move-p", dest="try_fallback_move_p", action="store_false", help="关闭 move_p fallback")
     r.add_argument("--try-joint-fallback", action="store_true", default=True, help="连续无位移时尝试用 obs/q 做 move_j 兜底（默认开启）")
     r.add_argument("--no-try-joint-fallback", dest="try_joint_fallback", action="store_false", help="关闭 move_j 兜底")
-    r.add_argument("--go-home-after-replay", action="store_true", default=True, help="回放后自动回零位（默认开启）")
-    r.add_argument("--no-go-home-after-replay", dest="go_home_after_replay", action="store_false", help="关闭回放后回零位")
-    r.add_argument("--home-speed-percent", type=int, default=20, help="回零位速度百分比")
-    r.add_argument("--home-timeout", type=float, default=30.0, help="回零位超时[s]")
+    #r.add_argument("--go-home-after-replay", action="store_true", default=True, help="回放后自动回零位（默认开启）")
+    #r.add_argument("--no-go-home-after-replay", dest="go_home_after_replay", action="store_false", help="关闭回放后回零位")
+    #r.add_argument("--home-speed-percent", type=int, default=20, help="回零位速度百分比")
+    #r.add_argument("--home-timeout", type=float, default=30.0, help="回零位超时[s]")
     r.set_defaults(func=cmd_replay)
 
     m = sub.add_parser("make-config", help="生成 BC-RNN 配置模板")
