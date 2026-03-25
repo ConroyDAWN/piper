@@ -441,6 +441,10 @@ def cmd_replay(args: argparse.Namespace) -> None:
             no_motion_counter = 0
             timeout_counter = 0
             dynamic_wait_motion_done = bool(args.wait_motion_done)
+            pose_cmd_count = 0
+            pose_wait_timeout_count = 0
+            move_p_fallback_count = 0
+            joint_fallback_count = 0
             for i, act in enumerate(actions):
                 act = _apply_deadband_and_scale(
                     act,
@@ -461,8 +465,10 @@ def cmd_replay(args: argparse.Namespace) -> None:
                     wait_motion_done=dynamic_wait_motion_done,
                     motion_timeout=args.motion_timeout,
                 )
+                pose_cmd_count += 1
                 if not move_ok and args.retry_nonblocking_on_timeout and dynamic_wait_motion_done:
                     timeout_counter += 1
+                    pose_wait_timeout_count += 1
                     print("[WARN] wait_motion_done 超时，自动重试一次 non-blocking 下发")
                     _send_pose_command(
                         arm=arm,
@@ -502,6 +508,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                             "碰撞保护是否触发、速度比例是否过低。"
                         )
                         if args.try_fallback_move_p:
+                            move_p_fallback_count += 1
                             print("[WARN] 尝试 fallback: 使用 move_p + wait=True 发送一次当前目标位姿")
                             _send_pose_command(
                                 arm=arm,
@@ -513,7 +520,10 @@ def cmd_replay(args: argparse.Namespace) -> None:
                             pose_fb = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
                             fb_move = float(np.linalg.norm(pose_fb[:3] - curr_pose[:3]))
                             print(f"[WARN] fallback measured_move={fb_move:.6f}")
+                            if fb_move >= args.motion_epsilon:
+                                no_motion_counter = 0
                         if args.try_joint_fallback and obs_q is not None and i < len(obs_q):
+                            joint_fallback_count += 1
                             print("[WARN] 尝试 joint fallback: 发送当前样本对应的 q 目标")
                             joint_ok = _send_joint_command(
                                 arm=arm,
@@ -522,10 +532,26 @@ def cmd_replay(args: argparse.Namespace) -> None:
                                 motion_timeout=max(args.motion_timeout, 2.0),
                             )
                             print(f"[WARN] joint fallback done, ok={joint_ok}")
+                            if joint_ok:
+                                no_motion_counter = 0
 
                 time.sleep(args.period)
 
             print("[INFO] replay done")
+            print(
+                "[INFO] replay summary | "
+                f"pose_cmd_count={pose_cmd_count}, "
+                f"pose_wait_timeout_count={pose_wait_timeout_count}, "
+                f"move_p_fallback_count={move_p_fallback_count}, "
+                f"joint_fallback_count={joint_fallback_count}"
+            )
+
+            if args.go_home_after_replay:
+                print("[INFO] go home after replay")
+                arm.set_motion_mode_j()
+                arm.set_speed_percent(args.home_speed_percent)
+                home_ok = arm.go_home(wait=True, timeout=args.home_timeout)
+                print(f"[INFO] go_home done, ok={home_ok}")
 
         finally:
             print("[INFO] disable")
@@ -635,6 +661,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-try-fallback-move-p", dest="try_fallback_move_p", action="store_false", help="关闭 move_p fallback")
     r.add_argument("--try-joint-fallback", action="store_true", default=True, help="连续无位移时尝试用 obs/q 做 move_j 兜底（默认开启）")
     r.add_argument("--no-try-joint-fallback", dest="try_joint_fallback", action="store_false", help="关闭 move_j 兜底")
+    r.add_argument("--go-home-after-replay", action="store_true", default=True, help="回放后自动回零位（默认开启）")
+    r.add_argument("--no-go-home-after-replay", dest="go_home_after_replay", action="store_false", help="关闭回放后回零位")
+    r.add_argument("--home-speed-percent", type=int, default=20, help="回零位速度百分比")
+    r.add_argument("--home-timeout", type=float, default=30.0, help="回零位超时[s]")
     r.set_defaults(func=cmd_replay)
 
     m = sub.add_parser("make-config", help="生成 BC-RNN 配置模板")
