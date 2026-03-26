@@ -207,8 +207,8 @@ class PiperArm:
     def wait_motion_done(
         self,
         timeout: Optional[float] = None,
-        poll_interval: Optional[float] = None,
-        initial_sleep: float = 0.5,
+        poll_interval: Optional[float] = 0.1,
+        initial_sleep: float = 0.1,
         verbose: bool = True,
     ) -> bool:
         """
@@ -353,11 +353,12 @@ class PiperArm:
         pose: Pose6,
         wait: bool = True,
         timeout: Optional[float] = None,
+        initial_sleep: float = 0.1,
     ) -> bool:
         """点到点位姿运动。"""
         self._check_len(pose, 6, "pose")
         self.robot.move_p(list(pose))
-        return self.wait_motion_done(timeout=timeout) if wait else True
+        return self.wait_motion_done(timeout=timeout, initial_sleep=initial_sleep) if wait else True
 
     def move_l(
         self,
@@ -795,18 +796,101 @@ class PiperArm:
     # ============================================================
     # Observation / Action
     # ============================================================
+    @staticmethod
+    def _extract_vec6(data: Any, source_name: str) -> list:
+        """
+        从 SDK 返回对象中提取 6 维向量，兼容多种返回结构：
+        - 直接 list/tuple
+        - 带 msg/data/value/joints/joint_angles/angles/tcp_pose/flange_pose 属性
+        - dict 中对应键
+        """
+        def _as_vec6(candidate: Any) -> Optional[list]:
+            if isinstance(candidate, (list, tuple)) and len(candidate) == 6:
+                return [float(v) for v in candidate]
+            return None
+
+        # 1) 直接是 6 维序列
+        vec = _as_vec6(data)
+        if vec is not None:
+            return vec
+
+        # 2) 常见属性名
+        field_names = (
+            "msg",
+            "data",
+            "value",
+            "joints",
+            "joint_angles",
+            "angles",
+            "tcp_pose",
+            "flange_pose",
+        )
+        for name in field_names:
+            if hasattr(data, name):
+                vec = _as_vec6(getattr(data, name))
+                if vec is not None:
+                    return vec
+
+        # 3) dict 结构
+        if isinstance(data, dict):
+            for name in field_names:
+                if name in data:
+                    vec = _as_vec6(data[name])
+                    if vec is not None:
+                        return vec
+
+        raise RuntimeError(
+            f"{source_name} 返回结构无法解析为 6 维向量。"
+            f"type={type(data).__name__}, value={data}"
+        )
+
+    def _read_vec6_with_retry(
+        self,
+        reader,
+        source_name: str,
+        timeout_s: float = 1.0,
+        poll_interval_s: float = 0.02,
+    ) -> list:
+        """
+        读取 6 维向量并在短时间内重试。
+        用于刚 connect 后反馈帧尚未到达导致 reader 返回 None 的场景。
+        """
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        last_err: Optional[Exception] = None
+
+        while True:
+            data = reader()
+            if data is not None:
+                try:
+                    return self._extract_vec6(data, source_name)
+                except RuntimeError as exc:
+                    # 结构异常也允许在短时间内重试，兼容首帧不完整。
+                    last_err = exc
+
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(max(0.001, poll_interval_s))
+
+        if last_err is not None:
+            raise RuntimeError(
+                f"{source_name} 在 {timeout_s:.2f}s 内未得到可解析的 6 维反馈。"
+                f"最后错误: {last_err}"
+            )
+        raise RuntimeError(
+            f"{source_name} 在 {timeout_s:.2f}s 内未收到反馈（返回 None）。"
+        )
+
     def get_joint_position_rad(self) -> list:
         """
         获取当前 6 关节角度，单位 rad。
-        当前环境下：get_joint_angles().msg 为 6 维 list
+        兼容不同 SDK 版本的返回结构。
         """
-        data = self.get_joint_angles()
-        if not hasattr(data, "msg"):
-            raise RuntimeError("get_joint_angles() 返回对象中不存在 msg 字段")
-        q = data.msg
-        if not isinstance(q, (list, tuple)) or len(q) != 6:
-            raise RuntimeError(f"joint_angles.msg 不是长度为6的列表，实际为: {q}")
-        return [float(v) for v in q]
+        return self._read_vec6_with_retry(
+            reader=self.get_joint_angles,
+            source_name="get_joint_angles()",
+            timeout_s=1.0,
+            poll_interval_s=0.02,
+        )
 
     def get_joint_velocity_rad_s(self) -> list:
         """
@@ -845,15 +929,14 @@ class PiperArm:
     def get_tcp_pose6(self) -> list:
         """
         获取当前 TCP 位姿 [x, y, z, rx, ry, rz]。
-        当前环境下：get_tcp_pose().msg 为 6 维 list
+        兼容不同 SDK 版本的返回结构。
         """
-        data = self.get_tcp_pose()
-        if not hasattr(data, "msg"):
-            raise RuntimeError("get_tcp_pose() 返回对象中不存在 msg 字段")
-        tcp_pose = data.msg
-        if not isinstance(tcp_pose, (list, tuple)) or len(tcp_pose) != 6:
-            raise RuntimeError(f"tcp_pose.msg 不是长度为6的列表，实际为: {tcp_pose}")
-        return [float(v) for v in tcp_pose]
+        return self._read_vec6_with_retry(
+            reader=self.get_tcp_pose,
+            source_name="get_tcp_pose()",
+            timeout_s=1.0,
+            poll_interval_s=0.02,
+        )
 
     def get_tcp_xyz(self) -> list:
         """获取当前 TCP 位置 [x, y, z]。"""

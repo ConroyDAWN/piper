@@ -1,0 +1,46 @@
+{
+  "algo_name": "bc",
+  "experiment": {
+    "name": "piper_bc_rnn_no_vision",
+    "validate": true,
+    "save": {
+      "enabled": true,
+      "every_n_epochs": 10
+    },
+    "logging": {
+      "terminal_output_to_txt": true
+    }
+  },
+  "train": {
+    "data": "/home/flowing/piper/data/demo_6d_010.hdf5",
+    "batch_size": 64,
+    "num_epochs": 200,
+    "hdf5_cache_mode": "all",
+    "seq_length": 50,
+    "dataset_keys": [
+      "actions",
+      "obs/q",
+      "obs/dq",
+      "obs/tcp_xyz"
+    ]
+  },
+  "observation": {
+    "modalities": {
+      "obs": {
+        "low_dim": [
+          "q",
+          "dq",
+          "tcp_xyz"
+        ]
+      }
+    }
+  },
+  "algo": {
+    "rnn": {
+      "enabled": true,
+      "horizon": 50,
+      "hidden_dim": 400,
+      "num_layers": 2
+    }
+  }
+}

@@ -34,8 +34,8 @@ import numpy as np
 try:
     from robot.piper_arm import PiperArm
 except ModuleNotFoundError:
-    src_dir = Path(__file__).resolve().parents[1]
-    if str(src_dir) not in sys.path:
+    src_dir = Path(__file__).resolve().parents[1] # 含义是：以当前脚本文件为基准，向上两层拿到 src 目录。
+    if str(src_dir) not in sys.path: # 避免重复添加
         sys.path.insert(0, str(src_dir))
     from robot.piper_arm import PiperArm
 
@@ -72,6 +72,18 @@ def wait_for_teach_mode(arm: PiperArm, timeout_s: float) -> None:
         if time.monotonic() > end_t:
             raise RuntimeError("示教模式检测超时，请检查示教模式是否开启（ctrl_mode==2）")
         time.sleep(0.01)
+
+
+def try_enter_teach_mode(arm: PiperArm, timeout_s: float) -> None:
+    """
+    尝试通过程序进入示教模式（若底层支持）。
+    依赖 pyAgxArm 的 restore_leader_drag_mode 接口。
+    """
+    try:
+        arm.restore_leader_drag_mode()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"程序进入示教模式失败: {exc}") from exc
+    wait_for_teach_mode(arm, timeout_s=timeout_s)
 
 
 def wait_exit_teach_mode(arm: PiperArm, timeout_s: float) -> None:
@@ -145,6 +157,43 @@ def wait_non_teaching_mode_after_enable(arm: PiperArm, timeout_s: float) -> None
     )
 
 
+def is_near_home(arm: PiperArm, tol_rad: float) -> bool:
+    """当前关节角是否接近零位。"""
+    q = arm.get_joint_position_rad()
+    return max(abs(v) for v in q) <= tol_rad
+
+
+def ensure_home_then_confirm(
+    arm: PiperArm,
+    tol_rad: float,
+    home_speed_percent: int,
+    home_timeout: float,
+    prompt: str,
+    disable_after_home: bool = False,
+) -> None:
+    """
+    若未在零位则先 go_home，确认到达零位后等待用户回车继续。
+    """
+    if not is_near_home(arm, tol_rad=tol_rad):
+        print("[INFO] 当前不在零位，先执行 go_home")
+        if not arm.enable(timeout=8.0):
+            raise RuntimeError("go_home 前 enable 失败")
+        arm.set_motion_mode_j()
+        arm.set_speed_percent(home_speed_percent)
+        ok = arm.go_home(wait=True, timeout=home_timeout)
+        print(f"[INFO] go_home done, ok={ok}")
+        if not ok:
+            raise RuntimeError("go_home 超时，未能确认到达零位")
+        if disable_after_home:
+            arm.disable(timeout=8.0)
+            print("[INFO] go_home 后已 disable")
+
+    if not is_near_home(arm, tol_rad=tol_rad):
+        raise RuntimeError("go_home 后仍未接近零位，请人工检查")
+
+    input(prompt)
+
+
 def action_from_obs(prev_obs: Dict, curr_obs: Dict, action_dim: int) -> List[float]:
     """
     由相邻两帧 obs 差分得到 action。
@@ -206,6 +255,7 @@ def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int
 
 
 def cmd_collect(args: argparse.Namespace) -> None:
+
     if args.samples <= 0:
         raise ValueError("--samples 必须 > 0")
     if args.action_dim not in (3, 6):
@@ -216,7 +266,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
     arm = PiperArm(
         channel=args.channel,
-        auto_connect=False,
+        auto_connect=False, # or connect too much
         tool_type=args.tool_type,
         tcp_offset=json.loads(args.tcp_offset),
     )
@@ -230,9 +280,23 @@ def cmd_collect(args: argparse.Namespace) -> None:
             print(f"[INFO] connect: channel={args.channel}, tool_type={args.tool_type}")
             arm.connect()
 
+            if args.ensure_home_before_collect:
+                ensure_home_then_confirm(
+                    arm=arm,
+                    tol_rad=args.home_tol_rad,
+                    home_speed_percent=args.home_speed_percent,
+                    home_timeout=args.home_timeout,
+                    prompt="[INFO] 已在零位。请进入示教模式后按回车继续",
+                    disable_after_home=False,
+                )
+
             if args.require_teach_mode:
-                print("[INFO] step 1: 请点击示教按钮进入示教模式")
-                wait_for_teach_mode(arm, timeout_s=args.teach_timeout)
+                if args.auto_enter_teach_mode:
+                    print("[INFO] step 1: 程序尝试进入示教模式")
+                    try_enter_teach_mode(arm, timeout_s=args.teach_timeout)
+                else:
+                    print("[INFO] step 1: 请点击示教按钮进入示教模式")
+                    wait_for_teach_mode(arm, timeout_s=args.teach_timeout)
                 print("[INFO] 已检测到示教模式")
 
             if not args.auto_start:
@@ -431,6 +495,17 @@ def cmd_replay(args: argparse.Namespace) -> None:
             arm.set_speed_percent(args.speed_percent)
             print_runtime_state(arm, "after_set_mode_speed")
 
+            if args.ensure_home_before_replay:
+                ensure_home_then_confirm(
+                    arm=arm,
+                    tol_rad=args.home_tol_rad,
+                    home_speed_percent=args.home_speed_percent,
+                    home_timeout=args.home_timeout,
+                    prompt="[INFO] 已在零位。按回车开始回放",
+                    disable_after_home=False,
+                )
+                print_runtime_state(arm, "after_home_before_replay")
+
             raw_norm = np.linalg.norm(actions[:, :3], axis=1) if actions.shape[1] >= 3 else np.zeros(len(actions))
             print(
                 f"[INFO] raw action stats | mean={raw_norm.mean():.6f}, "
@@ -559,7 +634,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
         finally:
             print("[INFO] disable")
-            arm.disable(timeout=8.0)
+        #     arm.disable(timeout=8.0)
 
 
 def cmd_make_config(args: argparse.Namespace) -> None:
@@ -612,9 +687,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("collect", help="采集并写入 HDF5")
-    c.add_argument("--output", required=True)
+    c.add_argument("--output", default="data/demo_6d_006.hdf5")
     c.add_argument("--episode-name", default="demo_0")
-    c.add_argument("--samples", type=int, required=True)
+    c.add_argument("--samples", type=int, default=300)
     c.add_argument("--period", type=float, default=0.05)
     c.add_argument("--action-dim", type=int, default=3, choices=[3, 6])
     c.add_argument("--channel", default="can0")
@@ -622,9 +697,15 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--tcp-offset", default="[0,0,0,0,0,0]")
     c.add_argument("--require-teach-mode", action="store_true", default=True, help="采集前强制检测示教模式（默认开启）")
     c.add_argument("--no-require-teach-mode", dest="require_teach_mode", action="store_false", help="关闭示教模式检测")
+    c.add_argument("--auto-enter-teach-mode", action="store_true", help="采集前尝试程序进入示教模式（底层支持时）")
     c.add_argument("--teach-timeout", type=float, default=10.0, help="示教模式检测超时[s]")
     c.add_argument("--auto-start", action="store_true", help="不等待回车，直接开始采集")
     c.add_argument("--enable-before-collect", action="store_true", help="采集前先 enable（默认关闭，避免影响示教拖动）")
+    c.add_argument("--ensure-home-before-collect", action="store_true", default=True, help="采集前确保零位（默认开启）")
+    c.add_argument("--no-ensure-home-before-collect", dest="ensure_home_before_collect", action="store_false", help="关闭采集前零位检查")
+    c.add_argument("--home-tol-rad", type=float, default=0.05, help="零位判定阈值[rad]")
+    c.add_argument("--home-speed-percent", type=int, default=20, help="回零位速度百分比")
+    c.add_argument("--home-timeout", type=float, default=30.0, help="回零位超时[s]")
     c.set_defaults(func=cmd_collect)
 
     i = sub.add_parser("inspect", help="检查 HDF5 数据结构")
@@ -652,6 +733,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--require-non-teaching-after-enable", action="store_true", default=True, help="enable 后再次检查不在示教模式（默认开启）")
     r.add_argument("--no-require-non-teaching-after-enable", dest="require_non_teaching_after_enable", action="store_false", help="关闭 enable 后非示教检查")
     r.add_argument("--non-teaching-timeout", type=float, default=2.0, help="enable 后等待退出示教的超时[s]")
+    r.add_argument("--ensure-home-before-replay", action="store_true", default=True, help="回放前确保零位（默认开启）")
+    r.add_argument("--no-ensure-home-before-replay", dest="ensure_home_before_replay", action="store_false", help="关闭回放前零位检查")
+    r.add_argument("--home-tol-rad", type=float, default=0.05, help="零位判定阈值[rad]")
     r.add_argument("--motion-epsilon", type=float, default=1e-4, help="判定“几乎没动”的平移阈值[m]")
     r.add_argument("--no-motion-warn-steps", type=int, default=5, help="连续多少次没动触发警告（每20步检查一次）")
     r.add_argument("--exec-mode", default="move_p", choices=["move_l", "move_p"], help="回放执行指令类型，默认 move_p（更稳）")
@@ -693,5 +777,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-# python src/imitation/no_vision_pipeline.py replay   --input data/demo_6d_001.hdf5   --episode-name demo_0   --period 0.05   --speed-percent 30   --exec-mode move_p   --no-wait-motion-done   --pos-step-max 0.05   --smooth-alpha 0.6   --no-try-joint-fallback

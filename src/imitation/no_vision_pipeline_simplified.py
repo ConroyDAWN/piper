@@ -24,6 +24,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
@@ -38,6 +39,66 @@ except ModuleNotFoundError:
     if str(src_dir) not in sys.path: # 避免重复添加
         sys.path.insert(0, str(src_dir))
     from robot.piper_arm import PiperArm
+
+# 监听
+
+
+@dataclass
+class _ReplayPoseState:
+    step: int
+    total: int
+    action: np.ndarray
+    pose: np.ndarray
+
+
+class ReplayPoseMonitor:
+    """异步打印回放位姿，减少主回放线程中的 I/O 阻塞。"""
+
+    def __init__(self, print_interval_s: float = 0.10) -> None:
+        self.print_interval_s = max(0.01, float(print_interval_s))
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._latest: _ReplayPoseState | None = None
+        self._version = 0
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="replay-pose-monitor", daemon=True)
+        self._thread.start()
+
+    def update(self, step: int, total: int, action: np.ndarray, pose: np.ndarray) -> None:
+        with self._lock:
+            self._latest = _ReplayPoseState(
+                step=step,
+                total=total,
+                action=np.asarray(action, dtype=np.float64).copy(),
+                pose=np.asarray(pose, dtype=np.float64).copy(),
+            )
+            self._version += 1
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+
+    def _run(self) -> None:
+        seen_version = -1
+        while not self._stop_event.is_set():
+            with self._lock:
+                current_version = self._version
+                latest = self._latest
+
+            if latest is not None and current_version != seen_version:
+                print(
+                    f"[INFO] step {latest.step}/{latest.total}, "
+                    f"action={latest.action}, next_pose={latest.pose}"
+                )
+                seen_version = current_version
+
+            time.sleep(self.print_interval_s)
 
 # Action normalization ----------------------------------
 
@@ -170,6 +231,7 @@ def print_runtime_state(arm: PiperArm, tag: str) -> None:
     )
 
 
+
 def wait_non_teaching_mode_after_enable(arm: PiperArm, timeout_s: float) -> None:
     """
     enable 后再次确认不在示教模式。
@@ -295,8 +357,8 @@ def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int
         "action_definition": "delta_tcp_pose6_normalized",
         "action_units": "normalized_-1_1",
         "action_raw_units": ["m", "m", "m", "rad", "rad", "rad"],
-        "action_pos_scale": [0.01, 0.01, 0.01],
-        "action_rot_scale": [0.2, 0.2, 0.2],
+        "action_pos_scale": ACTION_POS_SCALE.tolist(),
+        "action_rot_scale": ACTION_ROT_SCALE.tolist(),
         "q_units": "rad",
         "dq_units": "rad/s",
     }
@@ -342,13 +404,13 @@ def cmd_collect(args: argparse.Namespace) -> None:
             print("[INFO] step 1: 请点击示教按钮进入示教模式")
             wait_for_teach_mode(arm, timeout_s=5)
             print("[INFO] 已检测到示教模式")
-            input("[INFO] step 2: 按回车开始采集")
         except Exception as exc:  
             print(f"[ERROR] 前置检查失败: {exc}")
             return
 
         # 采集---------------------------------
         try:
+            input("[INFO] step 2: 按回车开始采集")
             print(f"[INFO] start collect: action_dim=6, samples={args.samples}")
 
             collect_freq=100  # 100Hz 采样频率，实测示教动作差分在这个频率下比较合适
@@ -543,6 +605,81 @@ def _send_pose_command(
         raise ValueError(f"unsupported exec_mode: {exec_mode}")
 
 
+
+# 加入差值 ------------------------------
+def _interpolate_pose_linear(
+    pose_start: np.ndarray,
+    pose_end: np.ndarray,
+    num_steps: int,
+) -> List[np.ndarray]:
+    """
+    对 6D tcp pose 做线性插值。
+    返回从 pose_start 到 pose_end 的中间点序列（不含起点，含终点）。
+
+    pose = [x, y, z, rx, ry, rz]
+    注意：
+    这里对欧拉角也是做线性插值，仅适用于相邻步姿态变化较小的情况。
+    由于你当前 action 本来就是相邻采样差分，因此通常可接受。
+    """
+    pose_start = np.asarray(pose_start, dtype=np.float64)
+    pose_end = np.asarray(pose_end, dtype=np.float64)
+
+    if pose_start.shape[0] != 6 or pose_end.shape[0] != 6:
+        raise ValueError("pose_start and pose_end must be 6D")
+
+    num_steps = max(1, int(num_steps))
+    out = []
+
+    delta = pose_end - pose_start
+    delta[3:6] = wrap_to_pi(delta[3:6])
+
+    for k in range(1, num_steps + 1):
+        alpha = k / num_steps
+        pose_k = pose_start.copy()
+        pose_k[:3] = pose_start[:3] + alpha * delta[:3]
+        pose_k[3:6] = pose_start[3:6] + alpha * delta[3:6]
+        pose_k[3:6] = wrap_to_pi(pose_k[3:6])
+        out.append(pose_k)
+
+    return out
+
+def _send_pose_command_with_interp(
+    arm: PiperArm,
+    pose_curr: np.ndarray,
+    pose_next: np.ndarray,
+    exec_mode: str,
+    interp_steps: int,
+    wait_motion_done: bool,
+    motion_timeout: float,
+    initial_sleep: float = 0.1,
+    step_sleep: float = 0.02,
+) -> bool:
+    """
+    将 pose_curr -> pose_next 拆成若干线性插值点，并逐点执行 move_p / move_l。
+    返回最后一次命令的执行结果。
+    """
+    interp_poses = _interpolate_pose_linear(
+        pose_start=pose_curr,
+        pose_end=pose_next,
+        num_steps=interp_steps,
+    )
+
+    ok = True
+    for pose_mid in interp_poses:
+        ok = _send_pose_command(
+            arm=arm,
+            pose_next=pose_mid,
+            exec_mode=exec_mode,
+            wait_motion_done=wait_motion_done,
+            motion_timeout=motion_timeout,
+            initial_sleep=initial_sleep,
+        )
+        time.sleep(step_sleep)
+
+    return ok
+
+
+
 def cmd_replay(args: argparse.Namespace) -> None:
     in_path = Path(args.input).expanduser().resolve()
     if not in_path.exists():
@@ -559,6 +696,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
         ep = f[f"data/{args.episode_name}"]
         actions = np.asarray(ep["actions"], dtype=np.float32)
         obs_q = np.asarray(ep["obs/q"], dtype=np.float32) if "obs/q" in ep else None
+        pose_monitor = ReplayPoseMonitor(print_interval_s=1.0)
 
         # 默认0表示全回放，不限制
         if args.max_steps > 0:
@@ -566,7 +704,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
             if obs_q is not None:
                 obs_q = obs_q[: args.max_steps]
 
-        prev_action = None
+
         # 前置内容------------------------------------------
         try:
             print(f"[INFO] connect: channel={args.channel}")
@@ -577,7 +715,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
             if not arm.enable(timeout=5.0):
                 raise RuntimeError("enable failed")
             print("[INFO] enabled")
-            
+
             ensure_home_then_confirm(
                 arm=arm,
                 tol_rad=0.03,
@@ -592,36 +730,46 @@ def cmd_replay(args: argparse.Namespace) -> None:
         # replay the trajectory------------------------------------------
         try:
             print_runtime_state(arm, "after_home_before_replay")
+            pose_monitor.start()
 
+            # prev_action = None
             time0= time.time()
             for i, act in enumerate(actions):
+                # denormalize action
+                act = denormalize_action(act)
                 # 过小的动作可能无法触发运动。通过死区和缩放调整到合适范围。
-                act = _apply_deadband_and_scale(
-                    act,
-                    action_scale=1,
-                    min_pos_step=0.00001,
-                    min_rot_step=0.00001,
-                )
+                # act = _apply_deadband_and_scale(
+                #     act,
+                #     action_scale=1,
+                #     min_pos_step=0.00001,
+                #     min_rot_step=0.00001,
+                # )
                 # 动作限幅，保护实机安全
-                act = _clip_action(act, 0.5, 0.5)
+                # act = _clip_action(act, 0.5, 0.5)
 
-                # 一阶低通平滑
-                act = _smooth_action(act, prev_action, 0.9)
+                # # 一阶低通平滑
+                # act = _smooth_action(act, prev_action, 0.9)
 
                 curr_pose = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
                 next_pose = _compose_next_pose(curr_pose, act)
+                pose_monitor.update(i + 1, len(actions), act, next_pose)
+                next_pose[3] =np.clip(next_pose[3], -np.pi, np.pi)
+                next_pose[4] = np.clip(next_pose[4], -np.pi/2, np.pi/2)
+                next_pose[5] = np.clip(next_pose[5], -np.pi, np.pi)
+
                 arm.set_motion_mode_p()
-                arm.set_speed_percent(100)
+                arm.set_speed_percent(1)
                 _send_pose_command(
                     arm=arm,
                     pose_next=next_pose,
                     exec_mode="move_p",
-                    wait_motion_done=False, # 等待反馈指令=0
-                    motion_timeout=0.2,
-                    initial_sleep=0.1,
+                    wait_motion_done=True, # 等待反馈指令=0
+                    motion_timeout=0.3,
+                    initial_sleep=0.02,
                 )
+                # prev_action = act.copy()
 
-                time.sleep(0.015)
+                #time.sleep(0.1) # 0.1效果挺不错的，可以再降低点速度试试。另外，进行线性插值。
             time1 = time.time()
             print(f"[INFO] replay finished, total_time={time1-time0:.2f}s")
             print("[INFO] replay done")
@@ -633,6 +781,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
             print(f"[INFO] go_home done, ok={home_ok}")
 
         finally:
+            pose_monitor.stop()
             print("[INFO] replay over")
         #     arm.disable(timeout=8.0)
 
