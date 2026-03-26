@@ -41,8 +41,8 @@ except ModuleNotFoundError:
 
 # Action normalization ----------------------------------
 
-ACTION_POS_SCALE = np.array([0.5, 0.5, 0.5], dtype=np.float32) 
-ACTION_ROT_SCALE = np.array([1.0, 1.0, 1.0], dtype=np.float32)  
+ACTION_POS_SCALE = np.array([0.01, 0.01, 0.01], dtype=np.float32) 
+ACTION_ROT_SCALE = np.array([0.8, 0.8, 0.8], dtype=np.float32)  
 
 
 def wrap_to_pi(x: np.ndarray) -> np.ndarray:
@@ -429,9 +429,44 @@ def cmd_inspect(args: argparse.Namespace) -> None:
             print(f"rewards shape      : {ep['rewards'].shape}")
             print(f"dones shape        : {ep['dones'].shape}")
 
-            act = np.asarray(ep["actions"])
+            act = np.asarray(ep["actions"], dtype=np.float32)
+
+            # 全局统计
+            print(f"\n[action global]")
             print(f"action min         : {act.min():.6f}")
             print(f"action max         : {act.max():.6f}")
+
+            if act.shape[1] == 6:
+                names = ["x", "y", "z", "rx", "ry", "rz"]
+
+                print("\n[action normalized per-dim]")
+                for i, name in enumerate(names):
+                    col = act[:, i]
+                    print(
+                        f"{name:>2s} : "
+                        f"min={col.min(): .6f}, "
+                        f"max={col.max(): .6f}, "
+                        f"mean={col.mean(): .6f}, "
+                        f"std={col.std(): .6f}"
+                    )
+
+                # 反归一化后再看物理量范围
+                act_raw = np.asarray([denormalize_action(a) for a in act], dtype=np.float32)
+
+                print("\n[action raw per-dim]")
+                raw_units = ["m", "m", "m", "rad", "rad", "rad"]
+                for i, (name, unit) in enumerate(zip(names, raw_units)):
+                    col = act_raw[:, i]
+                    print(
+                        f"{name:>2s} ({unit}) : "
+                        f"min={col.min(): .6f}, "
+                        f"max={col.max(): .6f}, "
+                        f"mean={col.mean(): .6f}, "
+                        f"std={col.std(): .6f}"
+                    )
+
+            else:
+                print(f"[WARN] actions dim is {act.shape[1]}, expected 6 for pose action")
 
 def _clip_action(action: np.ndarray, pos_step_max: float, rot_step_max: float) -> np.ndarray:
     """动作限幅，保护实机。"""
