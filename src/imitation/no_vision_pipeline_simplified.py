@@ -16,7 +16,6 @@ Piper 无视觉 imitation（robomimic BC-RNN）最小闭环脚本。
 - 当前关节角速度 dq
 - 末端位置 tcp_xyz（以及 tcp_pose 6D）
 - action 指令（Δx,Δy,Δz 或 Δx,Δy,Δz,Δrx,Δry,Δrz）
-- 上个 action 指令 last_action
 """
 
 from __future__ import annotations
@@ -213,7 +212,7 @@ def create_episode_datasets(ep_group: h5py.Group, num_samples: int, action_dim: 
     obs.create_dataset("tcp_pose", shape=(num_samples, 6), dtype=np.float32)
 
     ep_group.create_dataset("actions", shape=(num_samples, action_dim), dtype=np.float32)
-    ep_group.create_dataset("last_actions", shape=(num_samples, action_dim), dtype=np.float32)
+
 
 
 def write_sample(ep_group: h5py.Group, idx: int, obs: Dict, action: List[float]) -> None:
@@ -234,7 +233,7 @@ def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int
         "channel": args.channel,
         "tool_type": args.tool_type,
         "tcp_offset": json.loads(args.tcp_offset),
-        "nominal_period_s": 0.05 ,  # 理论采样周期
+        "nominal_period_s": 0.01 ,  # 理论采样周期
         "action_dim": args.action_dim,
         "action_definition": "delta_tcp_xyz" if args.action_dim == 3 else "delta_tcp_pose6",
         "action_units": "m" if args.action_dim == 3 else ["m", "m", "m", "rad", "rad", "rad"],
@@ -672,32 +671,32 @@ def cmd_make_config(args: argparse.Namespace) -> None:
     cfg = {
         "algo_name": "bc",
         "experiment": {
-            "name": args.exp_name,
+            "name": "piper_bc_rnn_no_vision",
             "validate": True,
             "save": {"enabled": True, "every_n_epochs": 10},
             "logging": {"terminal_output_to_txt": True},
         },
         "train": {
             "data": args.dataset,
-            "batch_size": args.batch_size,
-            "num_epochs": args.num_epochs,
+            "batch_size":64,
+            "num_epochs": 200,
             "hdf5_cache_mode": "all",
-            "seq_length": args.seq_length,
-            "dataset_keys": ["actions", "obs/q", "obs/dq", "obs/tcp_xyz", "last_actions"],
+            "seq_length": 50,
+            "dataset_keys": ["actions", "obs/q", "obs/dq", "obs/tcp_xyz"],
         },
         "observation": {
             "modalities": {
                 "obs": {
-                    "low_dim": ["q", "dq", "tcp_xyz", "last_actions"]
+                    "low_dim": ["q", "dq", "tcp_xyz"]
                 }
             }
         },
         "algo": {
             "rnn": {
                 "enabled": True,
-                "horizon": args.seq_length,
-                "hidden_dim": args.rnn_hidden_dim,
-                "num_layers": args.rnn_layers,
+                "horizon": 10,
+                "hidden_dim": 400,
+                "num_layers": 2,
             }
         },
     }
@@ -779,14 +778,14 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_replay)
 
     m = sub.add_parser("make-config", help="生成 BC-RNN 配置模板")
-    m.add_argument("--dataset", required=True)
-    m.add_argument("--output", required=True)
-    m.add_argument("--exp-name", default="piper_bc_rnn_no_vision")
-    m.add_argument("--batch-size", type=int, default=64)
-    m.add_argument("--num-epochs", type=int, default=200)
-    m.add_argument("--seq-length", type=int, default=10)
-    m.add_argument("--rnn-hidden-dim", type=int, default=400)
-    m.add_argument("--rnn-layers", type=int, default=2)
+    m.add_argument("--dataset", required=True, default = "data/demo_6d_010.hdf5")
+    m.add_argument("--output", required=True, default= "bc_rnn_no_vision010.json")
+    #m.add_argument("--exp-name", default="piper_bc_rnn_no_vision")
+    #m.add_argument("--batch-size", type=int, default=64)
+    #m.add_argument("--num-epochs", type=int, default=200)
+    #m.add_argument("--seq-length", type=int, default=10)
+    #m.add_argument("--rnn-hidden-dim", type=int, default=400)
+    #m.add_argument("--rnn-layers", type=int, default=2)
     m.set_defaults(func=cmd_make_config)
 
     return p
