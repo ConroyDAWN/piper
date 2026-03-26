@@ -39,6 +39,49 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(src_dir))
     from robot.piper_arm import PiperArm
 
+# Action normalization ----------------------------------
+
+ACTION_POS_SCALE = np.array([0.5, 0.5, 0.5], dtype=np.float32) 
+ACTION_ROT_SCALE = np.array([1.0, 1.0, 1.0], dtype=np.float32)  
+
+
+def wrap_to_pi(x: np.ndarray) -> np.ndarray:
+    """
+    将角度差值包裹到 [-pi, pi]，避免 6D 姿态差分出现 ±2pi 跳变。
+    """
+    return (x + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def normalize_action(action_raw: np.ndarray) -> np.ndarray:
+    """
+    raw 6D action -> normalized 6D action in [-1, 1]
+    action_raw = [dx, dy, dz, drx, dry, drz]
+    """
+    action_raw = np.asarray(action_raw, dtype=np.float32).copy()
+    if action_raw.shape[0] != 6:
+        raise ValueError(f"expected 6D action, got shape {action_raw.shape}")
+
+    action_raw[3:6] = wrap_to_pi(action_raw[3:6])
+    action_raw[0:3] = action_raw[0:3] / ACTION_POS_SCALE
+    action_raw[3:6] = action_raw[3:6] / ACTION_ROT_SCALE
+
+    return np.clip(action_raw, -1.0, 1.0)
+
+
+def denormalize_action(action_norm: np.ndarray) -> np.ndarray:
+    """
+    normalized 6D action -> raw 6D action
+    部署时使用。
+    """
+    action_norm = np.asarray(action_norm, dtype=np.float32).copy()
+    if action_norm.shape[0] != 6:
+        raise ValueError(f"expected 6D action, got shape {action_norm.shape}")
+
+    action_norm[0:3] = action_norm[0:3] * ACTION_POS_SCALE
+    action_norm[3:6] = action_norm[3:6] * ACTION_ROT_SCALE
+    return action_norm
+
+
 # building the observation --------------------------------
 def build_obs(arm: PiperArm) -> Dict:
     """读取一帧 observation。"""
@@ -188,22 +231,25 @@ def ensure_home_then_confirm(
 
 
 # get action --------------------------
-def action_from_obs(prev_obs: Dict, curr_obs: Dict, action_dim: int) -> List[float]:
+def action_from_obs(prev_obs: Dict, curr_obs: Dict) -> List[float]:
     """
-    由相邻两帧 obs 差分得到 action。
-    action_dim=3 -> [Δx,Δy,Δz]
-    action_dim=6 -> [Δx,Δy,Δz,Δrx,Δry,Δrz]
+    由相邻两帧 obs 差分得到 6D action，并归一化到 [-1, 1]。
+    action = [Δx, Δy, Δz, Δrx, Δry, Δrz]
     """
-    p0 = prev_obs["tcp_pose"]
-    p1 = curr_obs["tcp_pose"]
+    p0 = np.asarray(prev_obs["tcp_pose"], dtype=np.float32)
+    p1 = np.asarray(curr_obs["tcp_pose"], dtype=np.float32)
 
-    if action_dim == 3:
-        return [float(p1[i] - p0[i]) for i in range(3)]
-    return [float(p1[i] - p0[i]) for i in range(6)]
+    raw = p1 - p0
+    raw[3:6] = wrap_to_pi(raw[3:6])
+
+    action = normalize_action(raw)
+    return action.tolist()
 
 
-def create_episode_datasets(ep_group: h5py.Group, num_samples: int, action_dim: int) -> None:
+def create_episode_datasets(ep_group: h5py.Group, num_samples: int) -> None:
     """创建单个 episode 的数据集。"""
+    ep_group.attrs["num_samples"] = int(num_samples)
+
     obs = ep_group.require_group("obs")
     obs.create_dataset("t", shape=(num_samples, 1), dtype=np.float64)
     obs.create_dataset("q", shape=(num_samples, 6), dtype=np.float32)
@@ -211,11 +257,17 @@ def create_episode_datasets(ep_group: h5py.Group, num_samples: int, action_dim: 
     obs.create_dataset("tcp_xyz", shape=(num_samples, 3), dtype=np.float32)
     obs.create_dataset("tcp_pose", shape=(num_samples, 6), dtype=np.float32)
 
-    ep_group.create_dataset("actions", shape=(num_samples, action_dim), dtype=np.float32)
+    ep_group.create_dataset("actions", shape=(num_samples, 6), dtype=np.float32)
+    ep_group.create_dataset("rewards", shape=(num_samples,), dtype=np.float32)
+    ep_group.create_dataset("dones", shape=(num_samples,), dtype=np.bool_)
 
-
-
-def write_sample(ep_group: h5py.Group, idx: int, obs: Dict, action: List[float]) -> None:
+def write_sample(
+    ep_group: h5py.Group,
+    idx: int,
+    obs: Dict,
+    action: List[float],
+    is_last: bool,
+) -> None:
     ep_group["obs/t"][idx] = np.asarray([obs["t"]], dtype=np.float64)
     ep_group["obs/q"][idx] = np.asarray(obs["q"], dtype=np.float32)
     ep_group["obs/dq"][idx] = np.asarray(obs["dq"], dtype=np.float32)
@@ -223,27 +275,36 @@ def write_sample(ep_group: h5py.Group, idx: int, obs: Dict, action: List[float])
     ep_group["obs/tcp_pose"][idx] = np.asarray(obs["tcp_pose"], dtype=np.float32)
 
     ep_group["actions"][idx] = np.asarray(action, dtype=np.float32)
+    ep_group["rewards"][idx] = np.float32(0.0)
+    ep_group["dones"][idx] = np.bool_(is_last)
 
 
-
-def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int) -> None:
+def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int, freq=100) -> None:
     env_args = {
         "type": "real_robot",
+        "env_name": "real_piper_no_vision",
         "robot": "piper",
         "channel": args.channel,
         "tool_type": args.tool_type,
         "tcp_offset": json.loads(args.tcp_offset),
-        "nominal_period_s": 0.01 ,  # 理论采样周期
-        "action_dim": args.action_dim,
-        "action_definition": "delta_tcp_xyz" if args.action_dim == 3 else "delta_tcp_pose6",
-        "action_units": "m" if args.action_dim == 3 else ["m", "m", "m", "rad", "rad", "rad"],
+        "nominal_period_s": 1.0 / float(freq),
+        "action_dim": 6,
+        "action_definition": "delta_tcp_pose6_normalized",
+        "action_units": "normalized_-1_1",
+        "action_raw_units": ["m", "m", "m", "rad", "rad", "rad"],
+        "action_pos_scale": ACTION_POS_SCALE.tolist(),
+        "action_rot_scale": ACTION_ROT_SCALE.tolist(),
         "q_units": "rad",
         "dq_units": "rad/s",
     }
+
+    data_group = f.require_group("data")
+    data_group.attrs["env_args"] = json.dumps(env_args, ensure_ascii=False)
+    data_group.attrs["total"] = int(total_samples)
+
+    # 可保留根属性，便于 inspect
     f.attrs["env"] = "real_piper_no_vision"
     f.attrs["env_args"] = json.dumps(env_args, ensure_ascii=False)
-    f.require_group("data").attrs["total"] = int(total_samples)
-
 
 def cmd_collect(args: argparse.Namespace) -> None:
     # action-dim =3，6；
@@ -260,7 +321,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
     with h5py.File(out_path, "w") as f:
         data_group = f.require_group("data")
         ep_group = data_group.require_group(args.episode_name)
-        create_episode_datasets(ep_group, args.samples, args.action_dim)
+        create_episode_datasets(ep_group, args.samples)
         print(f"[INFO] connect: channel={args.channel}, tool_type={args.tool_type}")
         arm.connect()
         # 前置检查---------------------------------
@@ -285,27 +346,27 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
         # 采集---------------------------------
         try:
-            print(f"[INFO] start collect: action_dim={args.action_dim}, samples={args.samples}")
+            print(f"[INFO] start collect: action_dim=6, samples={args.samples}")
 
             collect_freq=100  # 100Hz 采样频率，实测示教动作差分在这个频率下比较合适
 
             # 为了构造 first sample，需要 2 帧
 
-            obs_t1 = build_obs(arm)
+            obs_prev = build_obs(arm)
 
             for idx in range(args.samples):
                 time.sleep(1.0 / collect_freq)
-                obs_t = build_obs(arm)
-                action = action_from_obs(obs_t1, obs_t, args.action_dim)
-                # obs_t1是上一时刻的观测，action是从obs_t1到obs_t的增量动作
-                write_sample(ep_group, idx, obs_t1, action) 
+                obs_curr = build_obs(arm)
+                action = action_from_obs(obs_prev, obs_curr)
+                # obs_prev是上一时刻的观测，action是从obs_prev到obs_curr的增量动作
+                write_sample(ep_group, idx, obs_prev, action, is_last=(idx == args.samples - 1)) 
 
-                obs_t1 = obs_t
+                obs_prev = obs_curr
 
                 if (idx + 1) % 20 == 0 or idx == args.samples - 1:
                     print(f"[INFO] collected {idx + 1}/{args.samples}")
 
-            add_file_metadata(f, args, args.samples)
+            add_file_metadata(f, args, args.samples, freq=collect_freq)
             print(f"[INFO] saved: {out_path}")
 
         finally: # 数据采集结束，机械臂仍处于示教模式；在点击取消示教模式之后，无法检测机械臂当前状态，无法发送指令。似乎只能直接退出。
@@ -344,23 +405,30 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         raise FileNotFoundError(in_path)
 
     with h5py.File(in_path, "r") as f:
-        print("\n===== HDF5 attrs =====")
+        print("\n===== HDF5 root attrs =====")
         for k, v in f.attrs.items():
             print(f"{k}: {v}")
 
         data = f["data"]
-        print(f"\n[data].attrs.total = {data.attrs.get('total', 'N/A')}")
+        print("\n===== data attrs =====")
+        for k, v in data.attrs.items():
+            print(f"{k}: {v}")
 
         for ep_name in data.keys():
             ep = data[ep_name]
             print(f"\n--- episode: {ep_name} ---")
-            print(f"obs/q shape         : {ep['obs/q'].shape}")
-            print(f"obs/dq shape        : {ep['obs/dq'].shape}")
-            print(f"obs/tcp_xyz shape   : {ep['obs/tcp_xyz'].shape}")
-            print(f"obs/tcp_pose shape  : {ep['obs/tcp_pose'].shape}")
-            print(f"actions shape       : {ep['actions'].shape}")
+            print(f"num_samples        : {ep.attrs.get('num_samples', 'N/A')}")
+            print(f"obs/q shape        : {ep['obs/q'].shape}")
+            print(f"obs/dq shape       : {ep['obs/dq'].shape}")
+            print(f"obs/tcp_xyz shape  : {ep['obs/tcp_xyz'].shape}")
+            print(f"obs/tcp_pose shape : {ep['obs/tcp_pose'].shape}")
+            print(f"actions shape      : {ep['actions'].shape}")
+            print(f"rewards shape      : {ep['rewards'].shape}")
+            print(f"dones shape        : {ep['dones'].shape}")
 
-
+            act = np.asarray(ep["actions"])
+            print(f"action min         : {act.min():.6f}")
+            print(f"action max         : {act.max():.6f}")
 
 def _clip_action(action: np.ndarray, pos_step_max: float, rot_step_max: float) -> np.ndarray:
     """动作限幅，保护实机。"""
@@ -437,16 +505,6 @@ def _send_pose_command(
         raise ValueError(f"unsupported exec_mode: {exec_mode}")
 
 
-# def _send_joint_command(
-#     arm: PiperArm,
-#     joints: np.ndarray,
-#     wait_motion_done: bool,
-#     motion_timeout: float,
-# ) -> bool:
-#     """发送关节目标（用于 tcp 回放无运动时的诊断/兜底）。"""
-#     return bool(arm.move_j(joints.tolist(), wait=wait_motion_done, timeout=motion_timeout))
-
-
 def cmd_replay(args: argparse.Namespace) -> None:
     in_path = Path(args.input).expanduser().resolve()
     if not in_path.exists():
@@ -475,33 +533,12 @@ def cmd_replay(args: argparse.Namespace) -> None:
         try:
             print(f"[INFO] connect: channel={args.channel}")
             arm.connect()
-            # print the state after connect
-            #print_runtime_state(arm, "after_connect")
-
             print("[INFO] 请确保已退出示教模式（回放需要非示教状态）")
-            # wait_exit_teach_mode(arm, timeout_s=5)
-            # mode_replay = get_ctrl_mode(arm)
-            # if mode_replay==1:
-            #     print(f"[INFO] 已确认非示教模式，当前 ctrl_mode={mode_replay}")
-            # else:
-            #     print(f"[WARN] 当前 ctrl_mode={mode_replay}")
 
-            #print_runtime_state(arm, "exit_teach_check")
 
             if not arm.enable(timeout=5.0):
                 raise RuntimeError("enable failed")
             print("[INFO] enabled")
-            # print_runtime_state(arm, "enabled")
-
-            # if args.require_non_teaching_after_enable:
-            #     wait_non_teaching_mode_after_enable(
-            #         arm=arm,
-            #         timeout_s=args.non_teaching_timeout,
-            #     )
-            #     print_runtime_state(arm, "after_non_teaching_check")
-
-
-            # print_runtime_state(arm, "after_set_mode_speed")
             
             ensure_home_then_confirm(
                 arm=arm,
@@ -518,23 +555,6 @@ def cmd_replay(args: argparse.Namespace) -> None:
         try:
             print_runtime_state(arm, "after_home_before_replay")
 
-            # 计算action的平均步长，判断过小or过大
-            # raw_norm = np.linalg.norm(actions[:, :3], axis=1) if actions.shape[1] >= 3 else np.zeros(len(actions))
-            # print(
-            #     f"[INFO] raw action stats | mean={raw_norm.mean():.6f}, "
-            #     f"p95={np.percentile(raw_norm, 95):.6f}, max={raw_norm.max():.6f}"
-            # )
-            # print(f"[INFO] replay start, steps={len(actions)}--------------")
-
-            # no_motion_counter = 0
-            # timeout_counter = 0
-            # 等待动作完成
-            # dynamic_wait_motion_done = True 
-            # checkpoint_pose = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
-            # pose_cmd_count = 0
-            # pose_wait_timeout_count = 0
-            # move_p_fallback_count = 0
-            # joint_fallback_count = 0
             time0= time.time()
             for i, act in enumerate(actions):
                 # 过小的动作可能无法触发运动。通过死区和缩放调整到合适范围。
@@ -562,94 +582,11 @@ def cmd_replay(args: argparse.Namespace) -> None:
                     motion_timeout=0.2,
                     initial_sleep=0.1,
                 )
-                # move_ok
-                # pose_cmd_count += 1
-                # 这里的move_ok指的是指令发送成功
-                # if not move_ok and dynamic_wait_motion_done:
-                #     timeout_counter += 1
-                #     pose_wait_timeout_count += 1
-                #     print("[WARN] wait_motion_done 超时，自动重试一次 non-blocking 下发")
-                #     _send_pose_command(
-                #         arm=arm,
-                #         pose_next=next_pose,
-                #         exec_mode="move_p",
-                #         wait_motion_done=False,
-                #         motion_timeout=1,
-                #     )
-                #     if timeout_counter >= 3:
-                #         dynamic_wait_motion_done = False
-                #         print(
-                #             "[WARN] 连续 wait 超时，后续自动切换为 no-wait 模式继续回放 "
-                #             f"(threshold={args.timeout_switch_threshold})"
-                #         )
-                # prev_action = act
-
-                # if (i + 1) % 20 == 0 or i == len(actions) - 1:
-                #     pose_after = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
-                #     # no-wait 模式下，单步前后几乎同时读取，常出现“看似0位移”的误判。
-                #     # 改为 checkpoint 位移（上次打印点到当前打印点）更贴近真实运动。
-                #     move_norm = float(np.linalg.norm(pose_after[:3] - checkpoint_pose[:3]))
-                #     cmd_norm = float(np.linalg.norm(act[:3])) if act.shape[0] >= 3 else 0.0
-                #     #判断无位移的阈值：
-                #     if move_norm < 0.0001:
-                #         no_motion_counter += 1
-                #     else:
-                #         no_motion_counter = 0
-                #     checkpoint_pose = pose_after
-
-                    # print(
-                    #     f"[INFO] replay {i + 1}/{len(actions)} | "
-                    #     f"cmd_norm={cmd_norm:.6f}, measured_move={move_norm:.6f}, "
-                    #     f"no_motion_counter={no_motion_counter}"
-                    # )
-                    # print_runtime_state(arm, f"replay_step_{i+1}")
-
-                    # if no_motion_counter >= 5:  # args.no_motion_warn_steps
-                    #     print(
-                    #         "[WARN] 连续多次检测到“有指令但几乎无位移”。"
-                    #         "请检查：是否仍在示教模式、是否驱动已使能、"
-                    #         "碰撞保护是否触发、速度比例是否过低。"
-                    #     )
-                    #     if args.try_fallback_move_p:
-                    #         move_p_fallback_count += 1
-                    #         print("[WARN] 尝试 fallback: 使用 move_p + wait=True 发送一次当前目标位姿")
-                    #         _send_pose_command(
-                    #             arm=arm,
-                    #             pose_next=next_pose,
-                    #             exec_mode="move_p",
-                    #             wait_motion_done=True,
-                    #             motion_timeout=max(1, 2.0),
-                    #         )
-                    #         pose_fb = np.asarray(arm.get_tcp_pose6(), dtype=np.float64)
-                    #         fb_move = float(np.linalg.norm(pose_fb[:3] - curr_pose[:3]))
-                    #         print(f"[WARN] fallback measured_move={fb_move:.6f}")
-                    #         if fb_move >= 0.0001:  # args.motion_epsilon
-                    #             no_motion_counter = 0
-                    #     if args.try_joint_fallback and obs_q is not None and i < len(obs_q):
-                    #         joint_fallback_count += 1
-                    #         print("[WARN] 尝试 joint fallback: 发送当前样本对应的 q 目标")
-                    #         joint_ok = _send_joint_command(
-                    #             arm=arm,
-                    #             joints=np.asarray(obs_q[i], dtype=np.float64),
-                    #             wait_motion_done=True,
-                    #             motion_timeout=max(1, 2.0),
-                    #         )
-                    #         print(f"[WARN] joint fallback done, ok={joint_ok}")
-                    #         if joint_ok:
-                    #             no_motion_counter = 0
 
                 time.sleep(0.015)
             time1 = time.time()
             print(f"[INFO] replay finished, total_time={time1-time0:.2f}s")
             print("[INFO] replay done")
-            # print(
-            #     "[INFO] replay summary | "
-            #     f"pose_cmd_count={pose_cmd_count}, "
-            #     f"pose_wait_timeout_count={pose_wait_timeout_count}, "
-            #     f"move_p_fallback_count={move_p_fallback_count}, "
-            #     f"joint_fallback_count={joint_fallback_count}"
-            # )
-
 
             print("[INFO] go home after replay")
             arm.set_motion_mode_j()
@@ -663,49 +600,186 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
 
 def cmd_make_config(args: argparse.Namespace) -> None:
-    """
-    生成 robomimic BC-RNN 配置模板。
-    用法：
-      python no_vision_pipeline.py make-config --dataset demo.hdf5 --output bc_rnn_no_vision.json
-    """
     cfg = {
         "algo_name": "bc",
         "experiment": {
             "name": "piper_bc_rnn_no_vision",
             "validate": True,
-            "save": {"enabled": True, "every_n_epochs": 10},
-            "logging": {"terminal_output_to_txt": True},
+            "logging": {
+                "terminal_output_to_txt": True,
+                "log_tb": True,
+                "log_wandb": False,
+                "wandb_proj_name": "debug"
+            },
+            "save": {
+                "enabled": True,
+                "every_n_seconds": None,
+                "every_n_epochs": 10,
+                "epochs": [],
+                "on_best_validation": False,
+                "on_best_rollout_return": False,
+                "on_best_rollout_success_rate": False
+            },
+            "epoch_every_n_steps": 100,
+            "validation_epoch_every_n_steps": 10,
+            "env": None,
+            "additional_envs": None,
+            "render": False,
+            "render_video": False,
+            "keep_all_videos": False,
+            "video_skip": 5,
+            "rollout": {
+                "enabled": False,
+                "n": 0,
+                "horizon": 0,
+                "rate": 0,
+                "warmstart": 0,
+                "terminate_on_success": False
+            },
+            "env_meta_update_dict": {},
+            "ckpt_path": None
         },
         "train": {
-            "data": args.dataset,
-            "batch_size":64,
-            "num_epochs": 200,
+            "data": [
+                {
+                    "path": args.dataset
+                }
+            ],
+            "output_dir": args.output,
+            "normalize_weights_by_ds_size": False,
+            "num_data_workers": 0,
             "hdf5_cache_mode": "all",
+            "hdf5_use_swmr": True,
+            "hdf5_load_next_obs": False,
+            "hdf5_normalize_obs": False,
+            "hdf5_filter_key": None,
+            "hdf5_validation_filter_key": None,
             "seq_length": 50,
-            "dataset_keys": ["actions", "obs/q", "obs/dq", "obs/tcp_xyz"],
+            "pad_seq_length": True,
+            "frame_stack": 1,
+            "pad_frame_stack": True,
+            "dataset_keys": [
+                "actions",
+                "obs/q",
+                "obs/dq",
+                "obs/tcp_pose"
+            ],
+            "action_keys": [
+                "actions"
+            ],
+            "action_config": {
+                "actions": {
+                    "normalization": None
+                }
+            },
+            "goal_mode": None,
+            "cuda": True,
+            "batch_size": 64,
+            "num_epochs": 200,
+            "seed": 1,
+            "max_grad_norm": None
+        },
+        "algo": {
+            "optim_params": {
+                "policy": {
+                    "optimizer_type": "adam",
+                    "learning_rate": {
+                        "initial": 1e-4,
+                        "decay_factor": 0.1,
+                        "epoch_schedule": []
+                    },
+                    "regularization": {
+                        "L2": 0.0
+                    }
+                }
+            },
+            "loss": {
+                "l2_weight": 1.0,
+                "l1_weight": 0.0,
+                "cos_weight": 0.0
+            },
+            "actor_layer_dims": [300, 400],
+            "gaussian": {
+                "enabled": False
+            },
+            "gmm": {
+                "enabled": False
+            },
+            "vae": {
+                "enabled": False
+            },
+            "rnn": {
+                "enabled": True,
+                "horizon": 50,
+                "hidden_dim": 400,
+                "rnn_type": "LSTM",
+                "num_layers": 2,
+                "open_loop": False,
+                "kwargs": {
+                    "bidirectional": False
+                }
+            },
+            "transformer": {
+                "enabled": False
+            }
         },
         "observation": {
             "modalities": {
                 "obs": {
-                    "low_dim": ["q", "dq", "tcp_xyz"]
+                    "low_dim": [
+                        "q",
+                        "dq",
+                        "tcp_pose"
+                    ],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []
+                },
+                "goal": {
+                    "low_dim": [],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []
+                }
+            },
+            "encoder": {
+                "low_dim": {
+                    "core_class": None,
+                    "core_kwargs": {},
+                    "obs_randomizer_class": None,
+                    "obs_randomizer_kwargs": {}
+                },
+                "rgb": {
+                    "core_class": "VisualCore",
+                    "core_kwargs": {},
+                    "obs_randomizer_class": None,
+                    "obs_randomizer_kwargs": {}
+                },
+                "depth": {
+                    "core_class": "VisualCore",
+                    "core_kwargs": {},
+                    "obs_randomizer_class": None,
+                    "obs_randomizer_kwargs": {}
+                },
+                "scan": {
+                    "core_class": "ScanCore",
+                    "core_kwargs": {},
+                    "obs_randomizer_class": None,
+                    "obs_randomizer_kwargs": {}
                 }
             }
         },
-        "algo": {
-            "rnn": {
-                "enabled": True,
-                "horizon": 10,
-                "hidden_dim": 400,
-                "num_layers": 2,
-            }
-        },
+        "meta": {
+            "hp_base_config_file": None,
+            "hp_keys": [],
+            "hp_values": []
+        }
     }
 
     out_path = Path(args.output).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"[INFO] wrote config: {out_path}")
-
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Piper 无视觉 imitation 最小闭环工具")
@@ -715,19 +789,10 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--output", default="data/demo_6d_010.hdf5")
     c.add_argument("--episode-name", default="demo_0")
     c.add_argument("--samples", type=int, default=1000)
-    # c.add_argument("--period", type=float, default=0.05) # 20HZ
     c.add_argument("--action-dim", type=int, default=6, choices=[3, 6])
     c.add_argument("--channel", default="can0")
     c.add_argument("--tool-type", default="none", choices=["none", "custom_tool", "agx_gripper"])
     c.add_argument("--tcp-offset", default="[0,0,0,0,0,0]")
-    # c.add_argument("--require-teach-mode", action="store_true", default=True, help="采集前强制检测示教模式（默认开启）")
-    # c.add_argument("--no-require-teach-mode", dest="require_teach_mode", action="store_false", help="关闭示教模式检测")
-    # c.add_argument("--auto-enter-teach-mode", action="store_true", help="采集前尝试程序进入示教模式（底层支持时）")
-    # c.add_argument("--teach-timeout", type=float, default=10.0, help="示教模式检测超时[s]")
-    # c.add_argument("--auto-start", action="store_true", help="不等待回车，直接开始采集")
-    #c.add_argument("--enable-before-collect", action="store_true", help="采集前先 enable（默认关闭，避免影响示教拖动）")
-    #c.add_argument("--ensure-home-before-collect", action="store_true", default=True, help="采集前确保零位（默认开启）")
-    #c.add_argument("--no-ensure-home-before-collect", dest="ensure_home_before_collect", action="store_false", help="关闭采集前零位检查")
     c.set_defaults(func=cmd_collect)
 
     i = sub.add_parser("inspect", help="检查 HDF5 数据结构")
@@ -742,50 +807,20 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--channel", default="can0")
     r.add_argument("--tool-type", default="none", choices=["none", "custom_tool", "agx_gripper", "revo2"])
     r.add_argument("--tcp-offset", default="[0,0,0,0,0,0]")
-    #r.add_argument("--speed-percent", type=int, default=30)
-    #r.add_argument("--action-scale", type=float, default=4.0, help="动作整体缩放系数；若不动可尝试 2~5")
-    #r.add_argument("--min-pos-step", type=float, default=0.005, help="平移 deadband[m]，小于该值置零")
-    #r.add_argument("--min-rot-step", type=float, default=0.005, help="旋转 deadband[rad]，小于该值置零")
-    #r.add_argument("--pos-step-max", type=float, default=0.005, help="单步最大平移[m]")
-    #r.add_argument("--rot-step-max", type=float, default=0.03, help="单步最大转角[rad]，action_dim=6 时使用")
-    #r.add_argument("--smooth-alpha", type=float, default=0.6, help="低通系数，越大越平滑")
-    # r.add_argument("--require-exit-teach-mode", action="store_true", default=True, help="回放前强制检查已退出示教（默认开启）")
     r.add_argument("--no-require-exit-teach-mode", dest="require_exit_teach_mode", action="store_false", help="关闭退出示教检查")
-    # r.add_argument("--exit-teach-timeout", type=float, default=10.0, help="等待退出示教超时[s]")
-    #r.add_argument("--require-non-teaching-after-enable", action="store_true", default=True, help="enable 后再次检查不在示教模式（默认开启）")
-    #r.add_argument("--no-require-non-teaching-after-enable", dest="require_non_teaching_after_enable", action="store_false", help="关闭 enable 后非示教检查")
     r.add_argument("--non-teaching-timeout", type=float, default=2.0, help="enable 后等待退出示教的超时[s]")
-    #r.add_argument("--ensure-home-before-replay", action="store_true", default=True, help="回放前确保零位（默认开启）")
     r.add_argument("--no-ensure-home-before-replay", dest="ensure_home_before_replay", action="store_false", help="关闭回放前零位检查")
-    #r.add_argument("--home-tol-rad", type=float, default=0.05, help="零位判定阈值[rad]")
-    #r.add_argument("--motion-epsilon", type=float, default=1e-4, help="判定“几乎没动”的平移阈值[m]")
-    #r.add_argument("--no-motion-warn-steps", type=int, default=5, help="连续多少次没动触发警告（每20步检查一次）")
     r.add_argument("--exec-mode", default="move_p", choices=["move_l", "move_p"], help="回放执行指令类型，默认 move_p（更稳）")
-    #r.add_argument("--wait-motion-done", action="store_true", default=True, help="每步等待运动完成（默认开启）")
-    #r.add_argument("--no-wait-motion-done", dest="wait_motion_done", action="store_false", help="关闭每步等待完成")
-    #r.add_argument("--motion-timeout", type=float, default=1.0, help="单步等待运动完成超时[s]")
-    #r.add_argument("--retry-nonblocking-on-timeout", action="store_true", default=True, help="wait 超时后自动 non-blocking 重试（默认开启）")
     r.add_argument("--no-retry-nonblocking-on-timeout", dest="retry_nonblocking_on_timeout", action="store_false", help="关闭超时重试")
-    #r.add_argument("--timeout-switch-threshold", type=int, default=3, help="连续 wait 超时多少次后切 no-wait")
     r.add_argument("--try-fallback-move-p", action="store_true", default=True, help="连续无位移时尝试 move_p fallback（默认开启）")
     r.add_argument("--no-try-fallback-move-p", dest="try_fallback_move_p", action="store_false", help="关闭 move_p fallback")
     r.add_argument("--try-joint-fallback", action="store_true", default=True, help="连续无位移时尝试用 obs/q 做 move_j 兜底（默认开启）")
     r.add_argument("--no-try-joint-fallback", dest="try_joint_fallback", action="store_false", help="关闭 move_j 兜底")
-    #r.add_argument("--go-home-after-replay", action="store_true", default=True, help="回放后自动回零位（默认开启）")
-    #r.add_argument("--no-go-home-after-replay", dest="go_home_after_replay", action="store_false", help="关闭回放后回零位")
-    #r.add_argument("--home-speed-percent", type=int, default=20, help="回零位速度百分比")
-    #r.add_argument("--home-timeout", type=float, default=30.0, help="回零位超时[s]")
     r.set_defaults(func=cmd_replay)
 
     m = sub.add_parser("make-config", help="生成 BC-RNN 配置模板")
     m.add_argument("--dataset", required=True, default = "data/demo_6d_010.hdf5")
     m.add_argument("--output", required=True, default= "bc_rnn_no_vision010.json")
-    #m.add_argument("--exp-name", default="piper_bc_rnn_no_vision")
-    #m.add_argument("--batch-size", type=int, default=64)
-    #m.add_argument("--num-epochs", type=int, default=200)
-    #m.add_argument("--seq-length", type=int, default=10)
-    #m.add_argument("--rnn-hidden-dim", type=int, default=400)
-    #m.add_argument("--rnn-layers", type=int, default=2)
     m.set_defaults(func=cmd_make_config)
 
     return p
