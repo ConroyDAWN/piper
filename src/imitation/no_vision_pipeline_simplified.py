@@ -279,21 +279,24 @@ def write_sample(
     ep_group["dones"][idx] = np.bool_(is_last)
 
 
-def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int, freq=100) -> None:
+def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int,freq) -> None:
     env_args = {
         "type": "real_robot",
         "env_name": "real_piper_no_vision",
+        "env_kwargs": {},
+
         "robot": "piper",
         "channel": args.channel,
         "tool_type": args.tool_type,
         "tcp_offset": json.loads(args.tcp_offset),
-        "nominal_period_s": 1.0 / float(freq),
-        "action_dim": 6,
+
+        "nominal_period_s": 1.0 / float(freq),   # 如果后续改采样频率，这里改成 1.0 / collect_freq
+        "action_dim": args.action_dim,
         "action_definition": "delta_tcp_pose6_normalized",
         "action_units": "normalized_-1_1",
         "action_raw_units": ["m", "m", "m", "rad", "rad", "rad"],
-        "action_pos_scale": ACTION_POS_SCALE.tolist(),
-        "action_rot_scale": ACTION_ROT_SCALE.tolist(),
+        "action_pos_scale": [0.01, 0.01, 0.01],
+        "action_rot_scale": [0.2, 0.2, 0.2],
         "q_units": "rad",
         "dq_units": "rad/s",
     }
@@ -302,7 +305,7 @@ def add_file_metadata(f: h5py.File, args: argparse.Namespace, total_samples: int
     data_group.attrs["env_args"] = json.dumps(env_args, ensure_ascii=False)
     data_group.attrs["total"] = int(total_samples)
 
-    # 可保留根属性，便于 inspect
+    # 根属性可保留，仅用于 inspect
     f.attrs["env"] = "real_piper_no_vision"
     f.attrs["env_args"] = json.dumps(env_args, ensure_ascii=False)
 
