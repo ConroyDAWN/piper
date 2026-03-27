@@ -38,6 +38,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(src_dir))
     from robot.piper_arm import PiperArm
 
+
 # ======================== 配置区（按需修改） ========================
 CHANNEL = "can0"
 ROBOT_NAME = "piper"
@@ -46,27 +47,29 @@ HAVE_GRIPPER = None
 
 PLAY_TIMES = 1
 PLAY_INTERVAL = 1.0
-MOVE_SPEED = 60
+MOVE_SPEED = 10
 PLAY_SPEED = 1.0
 
 MODE_TIMEOUT = 5.0
 ENABLE_TIMEOUT = 8.0
 CLIP_TO_LIMITS = True
+ENSURE_HOME_BEFORE_REPLAY = True
+START_FROM_SECOND_FRAME_IF_PREPOSITIONED = True
 
 # IK 相关配置
 URDF_PATH = (
     "/home/flowing/piper/agx_arm_ws/install/agx_arm_description/share/agx_arm_description/agx_arm_urdf/piper_l/urdf/piper_l_description.urdf"
 )
-IK_MAX_ITERS = 80
-IK_POS_TOL = 0.003         # m
-IK_ROT_TOL = 0.06          # rad
+IK_MAX_ITERS = 150
+IK_POS_TOL = 0.02         # m
+IK_ROT_TOL = 0.35          # rad
 IK_STEP_LIMIT = 0.08       # rad / iteration
-IK_DAMPING = 0.03
+IK_DAMPING = 0.05
 IK_POSITION_WEIGHT = 1.0
 IK_ROTATION_WEIGHT = 0.5
 
 CSV_PATH = os.path.join(os.path.dirname(__file__), "trajectory_pose0.csv")
-HDF5_PATH = "/home/flowing/piper/data/test/demo_005.hdf5"
+HDF5_PATH = "/home/flowing/piper/data/test/demo_006.hdf5"
 HDF5_EPISODE_NAME = "demo_0"
 
 # 数据来源:
@@ -613,15 +616,49 @@ def main() -> None:
 
         limits = get_joint_limits(arm)
 
-        input("step 2: 回车开始播放轨迹")
-
         q_seed = arm.get_joint_position_rad()
         if not q_seed or len(q_seed) != 6:
             q_seed = [0.0] * 6
 
+        # 1) 先归零（与 pipeline 的预对齐思路一致）
+        if ENSURE_HOME_BEFORE_REPLAY:
+            print("[INFO] go home before pre-positioning to first frame")
+            if not wait_joints_near_home(arm, timeout=25.0, tol_rad=0.03):
+                print("[WARN] go home timeout, continue")
+            q_seed = arm.get_joint_position_rad() or q_seed
+
+        # 2) 再到第一帧，等待人工确认后再连续播放
+        prepositioned = False
+        first_row = track[0]
+        if len(first_row) >= 7:
+            first_use_pose = (TRAJECTORY_MODE == "pose")
+            if first_use_pose:
+                first_pose = first_row[1:7]
+                ok, first_joints, info = ik_solver.solve(first_pose, q_seed)
+                if not ok:
+                    print(
+                        "[WARN] first frame IK not fully converged: "
+                        f"pos_err={info['pos_err']:.4f}m, rot_err={info['rot_err']:.4f}rad"
+                    )
+            else:
+                first_joints = first_row[1:7]
+
+            if CLIP_TO_LIMITS:
+                first_joints, _ = clip_joints(first_joints, limits)
+
+            print(f"[INFO] move_j to first frame: {first_joints}")
+            prepositioned = bool(arm.move_j(first_joints, wait=True, timeout=12.0))
+            q_seed = first_joints[:]
+            if not prepositioned:
+                print("[WARN] move to first frame failed or timeout, continue anyway")
+
+        input("step 2: 已到第一帧，回车开始连续播放轨迹")
+
         count = 0
         while PLAY_TIMES == 0 or count < abs(PLAY_TIMES):
-            for i, row in enumerate(track):
+            start_idx = 1 if (prepositioned and START_FROM_SECOND_FRAME_IF_PREPOSITIONED and len(track) > 1) else 0
+            for i in range(start_idx, len(track)):
+                row = track[i]
                 if len(row) < 7:
                     raise RuntimeError("轨迹列数错误，至少需要 wait_time + 6 values")
 

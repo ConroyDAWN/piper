@@ -533,7 +533,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 arm=arm,
                 tol_rad=0.03,
                 home_speed_percent=20,
-                home_timeout=10,
+                home_timeout=5,
                 prompt="[INFO] 已在零位。请进入示教模式后按回车继续",
             )
             # check teach mode

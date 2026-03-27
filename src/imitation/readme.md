@@ -8,11 +8,11 @@ python /home/flowing/piper/src/imitation/no_vision_pipeline_simplified.py collec
 再采第二条：
 
 python /home/flowing/piper/src/imitation/no_vision_pipeline_simplified.py collect\
-  --output /home/flowing/piper/data/test/demo_005.hdf5 
+  --output /home/flowing/piper/data/test/demo_006.hdf5 
 
 回放轨迹：
 python /home/flowing/piper/src/imitation/no_vision_pipeline_simplified.py replay\
-  --input /home/flowing/piper/data/test/demo_005.hdf5 
+  --input /home/flowing/piper/data/test/demo_006.hdf5 
 
 2）分别检查单轨迹 HDF5
 python /home/flowing/piper/src/imitation/no_vision_pipeline_simplified.py inspect \
