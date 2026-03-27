@@ -1,0 +1,51 @@
+running egg_info
+creating ../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info
+writing ../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/PKG-INFO
+writing dependency_links to ../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/dependency_links.txt
+writing entry points to ../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/entry_points.txt
+writing requirements to ../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/requires.txt
+writing top-level names to ../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/top_level.txt
+writing manifest file '../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/SOURCES.txt'
+reading manifest file '../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file '../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build
+creating /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib
+creating /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl
+copying agx_arm_ctrl/agx_arm_ctrl_single_node.py -> /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl
+copying agx_arm_ctrl/__init__.py -> /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl
+creating /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/effector
+copying agx_arm_ctrl/effector/agx_gripper.py -> /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/effector
+copying agx_arm_ctrl/effector/revo2.py -> /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/effector
+copying agx_arm_ctrl/effector/__init__.py -> /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/effector
+running install
+running install_lib
+creating /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl
+copying /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/agx_arm_ctrl_single_node.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl
+copying /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/__init__.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl
+creating /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/effector
+copying /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/effector/agx_gripper.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/effector
+copying /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/effector/revo2.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/effector
+copying /home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/build/lib/agx_arm_ctrl/effector/__init__.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/effector
+byte-compiling /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/agx_arm_ctrl_single_node.py to agx_arm_ctrl_single_node.cpython-310.pyc
+byte-compiling /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/__init__.py to __init__.cpython-310.pyc
+byte-compiling /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/effector/agx_gripper.py to agx_gripper.cpython-310.pyc
+byte-compiling /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/effector/revo2.py to revo2.cpython-310.pyc
+byte-compiling /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl/effector/__init__.py to __init__.cpython-310.pyc
+running install_data
+creating /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/ament_index
+creating /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/ament_index/resource_index
+creating /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/ament_index/resource_index/packages
+copying resource/agx_arm_ctrl -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/ament_index/resource_index/packages
+copying package.xml -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/agx_arm_ctrl
+creating /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/agx_arm_ctrl/launch
+copying launch/start_single_agx_arm_rviz.launch.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/agx_arm_ctrl/launch
+copying launch/start_single_agx_arm.launch.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/agx_arm_ctrl/launch
+copying launch/start_single_agx_arm_moveit.launch.py -> /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/share/agx_arm_ctrl/launch
+running install_egg_info
+Copying ../../../../build/agx_arm_ctrl/agx_arm_ctrl.egg-info to /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/python3.10/site-packages/agx_arm_ctrl-0.0.0-py3.10.egg-info
+running install_scripts
+Installing agx_arm_ctrl_single script to /home/flowing/piper/agx_arm_ws/install/agx_arm_ctrl/lib/agx_arm_ctrl
+writing list of installed files to '/home/flowing/piper/agx_arm_ws/build/agx_arm_ctrl/install.log'

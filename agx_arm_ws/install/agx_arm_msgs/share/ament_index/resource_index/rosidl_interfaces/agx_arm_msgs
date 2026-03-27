@@ -1,0 +1,12 @@
+msg/AgxArmStatus.idl
+msg/AgxArmStatus.msg
+msg/GripperStatus.idl
+msg/GripperStatus.msg
+msg/HandCmd.idl
+msg/HandCmd.msg
+msg/HandPositionTimeCmd.idl
+msg/HandPositionTimeCmd.msg
+msg/HandStatus.idl
+msg/HandStatus.msg
+msg/MoveMITMsg.idl
+msg/MoveMITMsg.msg

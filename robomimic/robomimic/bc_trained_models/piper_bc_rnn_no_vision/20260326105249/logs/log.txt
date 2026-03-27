@@ -1,0 +1,28 @@
+
+============= Initialized Observation Utils with Obs Spec =============
+
+using obs modality: low_dim with keys: ['q', 'tcp_xyz', 'dq']
+using obs modality: rgb with keys: []
+using obs modality: depth with keys: []
+using obs modality: scan with keys: []
+
+============= Loaded Environment Metadata =============
+run failed with error:
+"Unable to synchronously open attribute (can't locate attribute: 'env_args')"
+
+Traceback (most recent call last):
+  File "train.py", line 511, in main
+    train(config, device=device, resume=args.resume)
+  File "train.py", line 88, in train
+    env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path=dataset_path)
+  File "/home/flowing/piper/robomimic/robomimic/robomimic/utils/file_utils.py", line 110, in get_env_metadata_from_dataset
+    env_meta = json.loads(f["data"].attrs["env_args"])
+  File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+  File "/home/flowing/anaconda3/envs/robomimic/lib/python3.8/site-packages/h5py/_hl/attrs.py", line 56, in __getitem__
+    attr = h5a.open(self._id, self._e(name))
+  File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+  File "h5py/h5a.pyx", line 80, in h5py.h5a.open
+KeyError: "Unable to synchronously open attribute (can't locate attribute: 'env_args')"
+

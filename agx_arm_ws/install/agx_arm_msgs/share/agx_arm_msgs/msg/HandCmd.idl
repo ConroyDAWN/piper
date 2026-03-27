@@ -1,0 +1,44 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from agx_arm_msgs/msg/HandCmd.msg
+// generated code does not contain a copyright notice
+
+
+module agx_arm_msgs {
+  module msg {
+    @verbatim (language="comment", text=
+      "Revo2 dexterous hand control command message")
+    struct HandCmd {
+      @verbatim (language="comment", text=
+        "Control mode: position/speed/current")
+      string mode;
+
+      @verbatim (language="comment", text=
+        "Target values for each finger" "\n"
+        "position mode: [0, 100]" "\n"
+        "speed mode: [-100, 100]" "\n"
+        "current mode: [-100, 100]" "\n"
+        "Thumb tip")
+      int8 thumb_tip;
+
+      @verbatim (language="comment", text=
+        "Thumb base")
+      int8 thumb_base;
+
+      @verbatim (language="comment", text=
+        "Index finger")
+      int8 index_finger;
+
+      @verbatim (language="comment", text=
+        "Middle finger")
+      int8 middle_finger;
+
+      @verbatim (language="comment", text=
+        "Ring finger")
+      int8 ring_finger;
+
+      @verbatim (language="comment", text=
+        "Pinky finger")
+      int8 pinky_finger;
+    };
+  };
+};

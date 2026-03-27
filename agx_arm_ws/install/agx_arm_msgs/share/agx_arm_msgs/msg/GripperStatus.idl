@@ -1,0 +1,57 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from agx_arm_msgs/msg/GripperStatus.msg
+// generated code does not contain a copyright notice
+
+#include "std_msgs/msg/Header.idl"
+
+module agx_arm_msgs {
+  module msg {
+    @verbatim (language="comment", text=
+      "AgxGripper status feedback message")
+    struct GripperStatus {
+      std_msgs::msg::Header header;
+
+      @verbatim (language="comment", text=
+        "Gripper status" "\n"
+        "Current gripper opening width, unit: m")
+      double width;
+
+      @verbatim (language="comment", text=
+        "Current gripping force, unit: N")
+      double force;
+
+      @verbatim (language="comment", text=
+        "Driver status" "\n"
+        "Voltage too low")
+      boolean voltage_too_low;
+
+      @verbatim (language="comment", text=
+        "Motor overheating")
+      boolean motor_overheating;
+
+      @verbatim (language="comment", text=
+        "Driver overcurrent")
+      boolean driver_overcurrent;
+
+      @verbatim (language="comment", text=
+        "Driver overheating")
+      boolean driver_overheating;
+
+      @verbatim (language="comment", text=
+        "Sensor status")
+      boolean sensor_status;
+
+      @verbatim (language="comment", text=
+        "Driver error status")
+      boolean driver_error_status;
+
+      @verbatim (language="comment", text=
+        "Driver enable status")
+      boolean driver_enable_status;
+
+      @verbatim (language="comment", text=
+        "Homing/zero position status")
+      boolean homing_status;
+    };
+  };
+};

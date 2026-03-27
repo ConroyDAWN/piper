@@ -1,0 +1,6 @@
+Invoking command in '/home/flowing/piper/agx_arm_ws/build/agx_arm_msgs': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/flowing/piper/agx_arm_ws/src/agx_arm_ros/src/agx_arm_msgs -DCMAKE_INSTALL_PREFIX=/home/flowing/piper/agx_arm_ws/install/agx_arm_msgs
+Invoked command in '/home/flowing/piper/agx_arm_ws/build/agx_arm_msgs' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/flowing/piper/agx_arm_ws/src/agx_arm_ros/src/agx_arm_msgs -DCMAKE_INSTALL_PREFIX=/home/flowing/piper/agx_arm_ws/install/agx_arm_msgs
+Invoking command in '/home/flowing/piper/agx_arm_ws/build/agx_arm_msgs': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/flowing/piper/agx_arm_ws/build/agx_arm_msgs -- -j12 -l12
+Invoked command in '/home/flowing/piper/agx_arm_ws/build/agx_arm_msgs' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/flowing/piper/agx_arm_ws/build/agx_arm_msgs -- -j12 -l12
+Invoking command in '/home/flowing/piper/agx_arm_ws/build/agx_arm_msgs': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/flowing/piper/agx_arm_ws/build/agx_arm_msgs
+Invoked command in '/home/flowing/piper/agx_arm_ws/build/agx_arm_msgs' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/flowing/piper/agx_arm_ws/build/agx_arm_msgs
