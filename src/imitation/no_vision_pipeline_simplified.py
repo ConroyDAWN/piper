@@ -696,6 +696,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
         ep = f[f"data/{args.episode_name}"]
         actions = np.asarray(ep["actions"], dtype=np.float32)
         obs_q = np.asarray(ep["obs/q"], dtype=np.float32) if "obs/q" in ep else None
+        obs_pose = np.asarray(ep["obs/tcp_pose"], dtype=np.float32) if "obs/tcp_pose" in ep else None
         pose_monitor = ReplayPoseMonitor(print_interval_s=1.0)
 
         # 默认0表示全回放，不限制
@@ -721,8 +722,28 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 tol_rad=0.03,
                 home_speed_percent=20,
                 home_timeout=10,
-                prompt="[INFO] 已在零位。按回车开始回放",
+                prompt="[INFO] 已在零位。按回车进行轨迹起点对齐",
             )
+
+            if obs_pose is not None and len(obs_pose) > 0:
+                first_pose = np.asarray(obs_pose[0], dtype=np.float64).copy()
+                first_pose[3] = np.clip(first_pose[3], -np.pi, np.pi)
+                first_pose[4] = np.clip(first_pose[4], -np.pi / 2, np.pi / 2)
+                first_pose[5] = np.clip(first_pose[5], -np.pi, np.pi)
+                print(f"[INFO] move to first trajectory pose: {first_pose.tolist()}")
+                arm.set_motion_mode_p()
+                arm.set_speed_percent(5)
+                _send_pose_command(
+                    arm=arm,
+                    pose_next=first_pose,
+                    exec_mode="move_p",
+                    wait_motion_done=True,
+                    motion_timeout=3.0,
+                    initial_sleep=0.02,
+                )
+                input("[INFO] 已到达轨迹起点，按回车开始正式回放")
+            else:
+                print("[WARN] HDF5 中缺少 obs/tcp_pose，跳过轨迹起点对齐")
         except Exception as exc:
             print(f"[ERROR] 前置检查失败: {exc}")
             return
