@@ -20,22 +20,25 @@
     2) 本文件设置 DATA_SOURCE="hdf5"、HDF5_PATH、HDF5_EPISODE_NAME
     3) TRAJECTORY_MODE 设为 "pose"（读取 obs/tcp_pose 走 IK）或 "joint"（读取 obs/q）
 """
-import sys
-from pathlib import Path
+
 import csv
 import math
 import os
 import signal
+import sys
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+
+src_dir = Path(__file__).resolve().parents[1]
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
+
 try:
     from robot.piper_arm import PiperArm
 except ModuleNotFoundError:
-    src_dir = Path(__file__).resolve().parents[1] # 含义是：以当前脚本文件为基准，向上两层拿到 src 目录。
-    if str(src_dir) not in sys.path: # 避免重复添加
-        sys.path.insert(0, str(src_dir))
     from robot.piper_arm import PiperArm
 
 
@@ -47,7 +50,7 @@ HAVE_GRIPPER = None
 
 PLAY_TIMES = 1
 PLAY_INTERVAL = 1.0
-MOVE_SPEED = 10
+MOVE_SPEED = 15
 PLAY_SPEED = 1.0
 
 MODE_TIMEOUT = 5.0
@@ -58,18 +61,19 @@ START_FROM_SECOND_FRAME_IF_PREPOSITIONED = True
 
 # IK 相关配置
 URDF_PATH = (
-    "/home/flowing/piper/agx_arm_ws/install/agx_arm_description/share/agx_arm_description/agx_arm_urdf/piper_l/urdf/piper_l_description.urdf"
+    "/home/flowing/piper/agx_arm_ws/install/agx_arm_description/share/agx_arm_description/"
+    "agx_arm_urdf/piper_l/urdf/piper_l_description.urdf"
 )
-IK_MAX_ITERS = 150
-IK_POS_TOL = 0.02         # m
+IK_MAX_ITERS = 80
+IK_POS_TOL = 0.02          # m
 IK_ROT_TOL = 0.35          # rad
 IK_STEP_LIMIT = 0.08       # rad / iteration
-IK_DAMPING = 0.05
+IK_DAMPING = 0.5
 IK_POSITION_WEIGHT = 1.0
 IK_ROTATION_WEIGHT = 0.5
 
 CSV_PATH = os.path.join(os.path.dirname(__file__), "trajectory_pose0.csv")
-HDF5_PATH = "/home/flowing/piper/data/test/demo_006.hdf5"
+HDF5_PATH = "/home/flowing/piper/data/test/demo_007.hdf5"
 HDF5_EPISODE_NAME = "demo_0"
 
 # 数据来源:
@@ -573,7 +577,6 @@ def main() -> None:
         raise RuntimeError("空轨迹")
 
     ik_solver = PiperUrdfIkSolver(URDF_PATH)
-
 
     have_gripper = bool(HAVE_GRIPPER)
 

@@ -377,10 +377,33 @@ def wait_non_teaching_mode_after_enable(arm: PiperArm, timeout_s: float) -> None
 
 
 # check home pos---------------------------------
-def is_near_home(arm: PiperArm, tol_rad: float) -> bool:
-    """当前关节角是否接近零位。"""
-    q = arm.get_joint_position_rad()
-    return max(abs(v) for v in q) <= tol_rad
+
+def wait_joints_near_home(
+    arm: PiperArm,
+    timeout: float = 25.0,
+    tol_rad: float = 0.03,
+) -> bool:
+    """
+    与 ik_movej.py 一致：持续发布 move_j([0]*6) 并检测是否接近零位。
+    """
+    start_t = time.monotonic()
+    last_pub = 0.0
+    while time.monotonic() - start_t <= timeout:
+        now = time.monotonic()
+        if now - last_pub >= 0.25:
+            arm.move_j([0.0] * 6, wait=False)
+            last_pub = now
+
+        try:
+            q = arm.get_joint_position_rad()
+            if q and max(abs(v) for v in q) <= tol_rad:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.05)
+    return False
+
+
 
 
 def ensure_home_then_confirm(
@@ -390,24 +413,19 @@ def ensure_home_then_confirm(
     home_timeout: float,
     prompt: str,
 ) -> None:
+    
     """
-    若未在零位则先 go_home，确认到达零位后等待用户回车继续。
+    回零逻辑与 ik_movej.py 对齐：不依赖 is_near_home / go_home，
+    直接持续发布 move_j([0]*6) 直到接近零位。
     """
-    if not is_near_home(arm, tol_rad=tol_rad):
-        print("[INFO] 当前不在零位，先执行 go_home")
-        if not arm.enable(timeout=8.0):
-            raise RuntimeError("go_home 前 enable 失败")
-        arm.set_motion_mode_j()
-        arm.set_speed_percent(home_speed_percent)
-        ok = arm.go_home(wait=True, timeout=home_timeout)
-        print(f"[INFO] go_home done, ok={ok}")
-        if not ok:
-            print("[WARN] go_home 超时，未能确认到达零位，再次执行 go_home")
-            ok= arm.go_home(wait=True, timeout=home_timeout)
-            if not ok:
-                raise RuntimeError("第二次go_home 超时")
+    print("[INFO] 执行回零：持续发送 move_j([0]*6)")
+    if not arm.enable(timeout=3.0):
+        raise RuntimeError("回零前 enable 失败")
+    arm.set_motion_mode_j()
+    arm.set_speed_percent(home_speed_percent)
 
-    if not is_near_home(arm, tol_rad=tol_rad):
+    if not wait_joints_near_home(arm, timeout=home_timeout, tol_rad=tol_rad):
+
         arm.disable(timeout=1.0)
         raise RuntimeError("go_home 后仍未接近零位，请人工检查")
 
@@ -533,7 +551,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 arm=arm,
                 tol_rad=0.03,
                 home_speed_percent=20,
-                home_timeout=5,
+                home_timeout=3,
                 prompt="[INFO] 已在零位。请进入示教模式后按回车继续",
             )
             # check teach mode
@@ -1197,7 +1215,7 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("collect", help="采集并写入 HDF5")
     c.add_argument("--output", default="data/demo_6d_010.hdf5")
     c.add_argument("--episode-name", default="demo_0")
-    c.add_argument("--samples", type=int, default=1000)
+    c.add_argument("--samples", type=int, default=700)
     c.add_argument("--action-dim", type=int, default=6, choices=[3, 6])
     c.add_argument("--channel", default="can0")
     c.add_argument("--tool-type", default="none", choices=["none", "custom_tool", "agx_gripper"])

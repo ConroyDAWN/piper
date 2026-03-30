@@ -2,7 +2,7 @@ import json
 import h5py
 from pathlib import Path
 
-hdf5_path = Path("/home/flowing/piper/data/train_pose6_merged.hdf5")
+hdf5_path = Path("/home/flowing/piper/data/merge_demos/train_merged_3_28_1.hdf5")
 
 with h5py.File(hdf5_path, "a") as f:
     data = f["data"]
