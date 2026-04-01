@@ -147,6 +147,7 @@ def _skew(v: np.ndarray) -> np.ndarray:
 
 
 def so3_exp(rotvec: np.ndarray) -> np.ndarray:
+    """SO(3) exponential map from rotation vector to rotation matrix."""
     theta = float(np.linalg.norm(rotvec))
     if theta < 1e-12:
         return np.eye(3, dtype=np.float64)
@@ -376,7 +377,7 @@ def main() -> int:
         try:
             if not args.dry_run:
                 arm.move_j([0.0] * 6, wait=False)
-                time.sleep(0.8)
+                time.sleep(2.0)
         except Exception:
             pass
         try:
