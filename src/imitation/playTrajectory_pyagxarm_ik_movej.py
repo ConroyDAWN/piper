@@ -54,7 +54,7 @@ MOVE_SPEED = 15
 PLAY_SPEED = 1.0
 
 MODE_TIMEOUT = 5.0
-ENABLE_TIMEOUT = 8.0
+ENABLE_TIMEOUT = 5.0
 CLIP_TO_LIMITS = True
 ENSURE_HOME_BEFORE_REPLAY = True
 START_FROM_SECOND_FRAME_IF_PREPOSITIONED = True
@@ -132,11 +132,17 @@ def rot_z(y: float) -> List[List[float]]:
 
 
 def rpy_to_rot(r: float, p: float, y: float) -> List[List[float]]:
+    """"
+    euler -> rotation matrix, URDF rpy convention: R = Rz(yaw) * Ry(pitch) * Rx(roll)
+    """
     # URDF rpy convention: R = Rz(yaw) * Ry(pitch) * Rx(roll)
     return mat33_mul(mat33_mul(rot_z(y), rot_y(p)), rot_x(r))
 
 
 def rot_to_rpy(rm: List[List[float]]) -> List[float]:
+    """
+    rotation matrix -> euler angles, URDF rpy convention: R = Rz(yaw) * Ry(pitch) * Rx(roll)
+    """
     pitch = math.asin(clamp(-rm[2][0], -1.0, 1.0))
     cp = math.cos(pitch)
     if abs(cp) > 1e-8:
@@ -149,6 +155,9 @@ def rot_to_rpy(rm: List[List[float]]) -> List[float]:
 
 
 def compose_transform(rm: List[List[float]], t: Sequence[float]) -> List[List[float]]:
+    """
+    旋转矩阵 + 平移向量 -> 4x4 齐次变换矩阵
+    """
     return [
         [rm[0][0], rm[0][1], rm[0][2], t[0]],
         [rm[1][0], rm[1][1], rm[1][2], t[1]],
@@ -186,7 +195,10 @@ def axis_angle_rot(axis: Sequence[float], angle: float) -> List[List[float]]:
 
 
 def pose_error(curr_pos, curr_rot, tgt_pos, tgt_rot) -> Tuple[List[float], float, float]:
-    ep = [tgt_pos[i] - curr_pos[i] for i in range(3)]
+    """计算当前位姿与目标位姿的误差，返回 6D 误差向量（位置误差 + 旋转误差）以及位置误差和旋转误差的范数。"""
+
+    ep = [tgt_pos[i] - curr_pos[i] for i in range(3)] # position error vector in base frame
+
     # orientation error vector in base frame
     ec = [0.0, 0.0, 0.0]
     c0 = [curr_rot[0][0], curr_rot[1][0], curr_rot[2][0]]
@@ -202,7 +214,7 @@ def pose_error(curr_pos, curr_rot, tgt_pos, tgt_rot) -> Tuple[List[float], float
             a[2] * b[0] - a[0] * b[2],
             a[0] * b[1] - a[1] * b[0],
         ]
-
+    # 旋转误差向量的计算方法参考了现代机器人学教材，基于当前旋转矩阵的列向量与目标旋转矩阵的列向量的叉积之和来构造误差向量。
     c = cross(c0, t0)
     ec[0] += c[0]
     ec[1] += c[1]
@@ -289,10 +301,14 @@ class PiperUrdfIkSolver:
         return out
 
     def forward(self, q: Sequence[float]) -> Tuple[List[float], List[List[float]]]:
+        """getting the end-effector pose transformation matrix (position + rotation matrix) given joint angles q"""
         if len(q) != 6:
             raise ValueError("q length must be 6")
+        # initialize the transformation matrix
         t = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
         for i, joint in enumerate(self.joints):
+            # rpy roll , pich, yaw
+            # t0表示从上一关节坐标系到当前关节坐标系的变换（由URDF中的origin定义），tq表示当前关节的旋转变换（由axis和q定义）。通过连续乘积更新末端位姿。
             t0 = compose_transform(rpy_to_rot(joint.rpy[0], joint.rpy[1], joint.rpy[2]), joint.xyz)
             tq = compose_transform(axis_angle_rot(joint.axis, q[i]), [0.0, 0.0, 0.0])
             t = transform_mul(t, transform_mul(t0, tq))
@@ -314,7 +330,7 @@ class PiperUrdfIkSolver:
     ) -> Tuple[bool, List[float], Dict[str, float]]:
         if len(target_pose) != 6:
             raise ValueError("target_pose must be [x,y,z,r,p,y]")
-        q = [float(v) for v in seed_q]
+        q = [float(v) for v in seed_q] # copy seed_q to q, which will be updated iteratively
         tgt_pos = [target_pose[0], target_pose[1], target_pose[2]]
         tgt_rot = rpy_to_rot(target_pose[3], target_pose[4], target_pose[5])
 
@@ -325,14 +341,18 @@ class PiperUrdfIkSolver:
                 return True, q, {"pos_err": pos_err, "rot_err": rot_err}
 
             # numerical Jacobian J(6x6)
-            eps = 1e-4
+
+            eps = 1e-4 # finite difference step 微小扰动
+
+            # 计算微扰后末端位姿与当前末端位姿的误差，
+            # 作为关节 j 的数值雅可比矩阵列（6D 误差对关节增量的敏感度），
+            # 通过除以 eps 得到雅可比矩阵的近似值。
             j_mat = [[0.0] * 6 for _ in range(6)]
             for j in range(6):
                 q2 = q[:]
                 q2[j] += eps
                 p2, r2 = self.forward(q2)
-                e2, _, _ = pose_error(curr_pos, curr_rot, p2, r2)
-                # derivative of end pose around current config
+                e2, _, _ = pose_error(curr_pos, curr_rot, p2, r2) 
                 for k in range(6):
                     j_mat[k][j] = e2[k] / eps
 
@@ -345,6 +365,7 @@ class PiperUrdfIkSolver:
                 IK_ROTATION_WEIGHT * err6[5],
             ]
 
+            # Damped Least Squares (DLS) method to compute joint updates dq
             # DLS: dq = J^T * (J J^T + λ^2 I)^-1 * e
             jj_t = [[0.0] * 6 for _ in range(6)]
             for r in range(6):

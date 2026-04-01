@@ -106,6 +106,7 @@ class ReplayPoseMonitor:
 # ACTION_POS_SCALE = np.array([0.01, 0.01, 0.01], dtype=np.float32) 
 # ACTION_ROT_SCALE = np.array([0.8, 0.8, 0.8], dtype=np.float32)  
 
+#  normalization parameters
 ACTION_POS_SCALE = np.array([0.01, 0.01, 0.01], dtype=np.float32)
 ACTION_ROT_SCALE = np.array([0.8, 0.8, 0.8], dtype=np.float32)
 SO3_EPS = 1e-8
@@ -245,10 +246,10 @@ def normalize_action(action_raw: np.ndarray) -> np.ndarray:
         raise ValueError(f"expected 6D action, got shape {action_raw.shape}")
 
     # action_raw[3:6] = wrap_to_pi(action_raw[3:6])
-    action_raw[0:3] = action_raw[0:3] / ACTION_POS_SCALE
+    action_raw[0:3] = action_raw[0:3] / ACTION_POS_SCALE # normalization parameters
     action_raw[3:6] = action_raw[3:6] / ACTION_ROT_SCALE
 
-    return np.clip(action_raw, -1.0, 1.0)
+    return np.clip(action_raw, -1.0, 1.0) # clip to [-1, 1] to avoid outliers
 
 
 def denormalize_action(action_norm: np.ndarray) -> np.ndarray:
@@ -543,6 +544,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
         create_episode_datasets(ep_group, args.samples)
         print(f"[INFO] connect: channel={args.channel}, tool_type={args.tool_type}")
         arm.connect()
+        time.sleep(0.2)  # 等待连接稳定
         # 前置检查---------------------------------
         try:
             # make sure home pos before collect
@@ -578,6 +580,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
                 obs_curr = build_obs(arm)
                 action = action_from_obs(obs_prev, obs_curr)
                 # obs_prev是上一时刻的观测，action是从obs_prev到obs_curr的增量动作
+
+                # 写入观测数据+动作数据
                 write_sample(ep_group, idx, obs_prev, action, is_last=(idx == args.samples - 1)) 
 
                 obs_prev = obs_curr
@@ -597,23 +601,6 @@ def cmd_collect(args: argparse.Namespace) -> None:
             # arm.disable()     
             # time.sleep(0.5)  # 等待机械臂完全失能，确保安全
 
-            # try:
-            #     # check_mode=get_ctrl_mode(arm)
-            #     # print(f"[INFO] 当前 ctrl_mode: {check_mode}")
-            #     wait_exit_teach_mode(arm, timeout_s=5) # 如果异常，会爆出 RuntimeError，就会执行except块
-            #     exited_teach = True
-            #     print("[INFO] 已确认退出示教模式")
-            # except Exception as exc:
-            #     check_mode_later=get_ctrl_mode(arm)
-            #     # print(f"[WARN] 等待退出示教模式超时，当前 ctrl_mode={check_mode_later}")
-            #     print(f"[WARN] 未确认退出示教模式，跳过 go_home: {exc}")
-
-            # if exited_teach:
-            #     print("[INFO] 开始回零位")
-            #     ok = arm.go_home(wait=True, timeout=10)
-            #     print(f"[INFO] go_home done, ok={ok}")
-            #     if not ok:
-            #         raise RuntimeError("go_home 超时，未能确认到达零位")
 
 
 
@@ -685,45 +672,6 @@ def cmd_inspect(args: argparse.Namespace) -> None:
             else:
                 print(f"[WARN] actions dim is {act.shape[1]}, expected 6 for pose action")
 
-def _clip_action(action: np.ndarray, pos_step_max: float, rot_step_max: float) -> np.ndarray:
-    """动作限幅，保护实机。"""
-    out = action.copy()
-    if out.shape[0] >= 3:
-        out[:3] = np.clip(out[:3], -pos_step_max, pos_step_max)
-    if out.shape[0] >= 6:
-        out[3:6] = np.clip(out[3:6], -rot_step_max, rot_step_max)
-    return out
-
-
-def _apply_deadband_and_scale(
-    action: np.ndarray,
-    action_scale: float,
-    min_pos_step: float,
-    min_rot_step: float,
-) -> np.ndarray:
-    """
-    - action_scale: 放大/缩小动作（解决采样差分过小导致不动）
-    - deadband: 小于阈值的动作置零，避免抖动和无效细碎命令
-    """
-    out = action.copy() * float(action_scale)
-
-    if out.shape[0] >= 3 and min_pos_step > 0:
-        for i in range(3):
-            if abs(out[i]) < min_pos_step:
-                out[i] = 0.0
-
-    if out.shape[0] >= 6 and min_rot_step > 0:
-        for i in range(3, 6):
-            if abs(out[i]) < min_rot_step:
-                out[i] = 0.0
-    return out
-
-
-def _smooth_action(action: np.ndarray, prev_action: np.ndarray | None, alpha: float) -> np.ndarray:
-    """一阶低通平滑。"""
-    if prev_action is None:
-        return action
-    return alpha * prev_action + (1.0 - alpha) * action
 
 
 def _compose_next_pose(curr_pose: np.ndarray, delta_action: np.ndarray) -> np.ndarray:
@@ -1031,7 +979,7 @@ def cmd_make_config(args: argparse.Namespace) -> None:
         "algo_name": "bc",
         "experiment": {
             "name": "piper_bc_rnn_no_vision",
-            "validate": True,
+            "validate": False,
             "logging": {
                 "terminal_output_to_txt": True,
                 "log_tb": True,
