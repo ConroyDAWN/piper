@@ -1,0 +1,63 @@
+# Single configuration file for simplified imitation pipeline.
+
+robot:
+  channel: can0
+  robot_name: piper
+  tool_type: none
+  speed: 20
+  enable_timeout: 3.0
+
+paths:
+  urdf: /home/flowing/piper/agx_arm_ws/install/agx_arm_description/share/agx_arm_description/agx_arm_urdf/piper/urdf/piper_description.urdf
+  collected_hdf5: /home/flowing/piper/data/demo_single/demo_002.hdf5
+  merged_hdf5: /home/flowing/piper/data/demo_merged/demo_merged1.hdf5
+  merged_inputs: [/home/flowing/piper/data/demo_single/demo_001.hdf5,/home/flowing/piper/data/demo_single/demo_002.hdf5]
+  robomimic_json: /home/flowing/piper/data/json/bc_rnn_no_vision1.json
+  model_deploy: /home/flowing/piper/data/json/piper_bc_rnn/20260404122556/models/model_epoch_50.pth
+
+collect:
+  episode_name: demo_0
+  samples: 500
+  sample_freq: 50
+  teach_wait_timeout: 10.0
+  home_timeout: 5.0
+  home_tol: 0.03
+
+  action_pos_scale: [0.005, 0.005, 0.005]
+  action_rot_scale: [0.031416, 0.031416, 0.031416]
+
+
+inspect:
+  episode_name: demo_0
+
+merge:
+  episode_prefix: demo_
+
+json:
+  output_dir: /home/flowing/piper/data/json/
+  seq_length: 50
+  batch_size: 64
+  num_epochs: 200
+
+replay:
+  episode_name: demo_0
+  max_steps: 0
+  control_dt: 0.05
+  home_timeout: 5.0
+  home_tol: 0.03
+  step_timeout: 12.0
+  ik_pos_hard: 0.005
+  ik_pos_tol: 0.0008
+  ik_rot_hard: 0.25
+  print_every: 20
+  return_home_on_exit: true
+
+  action_pos_scale: [0.005, 0.005, 0.005]
+  action_rot_scale: [0.031416, 0.031416, 0.031416]
+
+deploy:
+  control_dt: 0.05
+  max_steps: 0
+  print_every: 20
+  action_pos_scale: [0.005, 0.005, 0.005]
+  action_rot_scale: [0.031416, 0.031416, 0.031416]

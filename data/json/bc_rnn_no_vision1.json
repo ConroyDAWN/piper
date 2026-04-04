@@ -1,0 +1,47 @@
+{
+  "algo_name": "bc",
+  "experiment": {
+    "name": "piper_bc_rnn",
+    "validate": true
+  },
+  "train": {
+    "data": [
+      {
+        "path": "/home/flowing/piper/data/demo_single/demo_002.hdf5"
+      }
+    ],
+    "output_dir": "/home/flowing/piper/data/json/",
+    "seq_length": 50,
+    "batch_size": 64,
+    "num_epochs": 200,
+    "dataset_keys": [
+      "actions",
+      "obs/q",
+      "obs/dq",
+      "obs/tcp_pose"
+    ],
+    "hdf5_cache_mode": "all",
+    "hdf5_normalize_obs": false,
+    "cuda": true
+  },
+  "algo": {
+    "rnn": {
+      "enabled": true,
+      "horizon": 50,
+      "hidden_dim": 400,
+      "rnn_type": "LSTM",
+      "num_layers": 2
+    }
+  },
+  "observation": {
+    "modalities": {
+      "obs": {
+        "low_dim": [
+          "q",
+          "dq",
+          "tcp_pose"
+        ]
+      }
+    }
+  }
+}

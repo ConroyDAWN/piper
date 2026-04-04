@@ -36,10 +36,8 @@ src_dir = Path(__file__).resolve().parents[1]
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-try:
-    from robot.piper_arm import PiperArm
-except ModuleNotFoundError:
-    from robot.piper_arm import PiperArm
+
+from robot_piper.piper_arm import PiperArm
 
 
 # ======================== 配置区（按需修改） ========================
@@ -64,16 +62,16 @@ URDF_PATH = (
     "/home/flowing/piper/agx_arm_ws/install/agx_arm_description/share/agx_arm_description/"
     "agx_arm_urdf/piper_l/urdf/piper_l_description.urdf"
 )
-IK_MAX_ITERS = 80
-IK_POS_TOL = 0.02          # m
-IK_ROT_TOL = 0.35          # rad
+IK_MAX_ITERS = 280
+IK_POS_TOL = 0.2          # m
+IK_ROT_TOL = 0.5          # rad
 IK_STEP_LIMIT = 0.08       # rad / iteration
-IK_DAMPING = 0.5
+IK_DAMPING = 0.2
 IK_POSITION_WEIGHT = 1.0
-IK_ROTATION_WEIGHT = 0.5
+IK_ROTATION_WEIGHT = 1.0
 
 CSV_PATH = os.path.join(os.path.dirname(__file__), "trajectory_pose0.csv")
-HDF5_PATH = "/home/flowing/piper/data/test/demo_007.hdf5"
+HDF5_PATH = "/home/flowing/piper/data/single_demo/demo_010.hdf5"
 HDF5_EPISODE_NAME = "demo_0"
 
 # 数据来源:
@@ -705,13 +703,14 @@ def main() -> None:
                     if changed and not clip_warned:
                         print("[WARN] 轨迹存在越限关节，已自动裁剪到关节限位")
                         clip_warned = True
-
+                # print(f"[DEBUG] target joints: {joints}")
                 arm.move_j(joints, wait=False)
                 q_seed = joints[:]
 
                 if have_gripper and len(row) >= 8:
                     arm.gripper_move(row[7], sleep_after=0.0)
 
+                count += 1
                 mode_txt = "pose->IK->move_j" if use_pose else "joint->move_j"
                 print(
                     f"INFO: 第{count + 1}次播放[{mode_txt}]，等待:{wait_time:.4f}s，目标:{row[1:7]}"
@@ -722,7 +721,7 @@ def main() -> None:
                 else:
                     time.sleep(max(0.0, wait_time))
 
-            count += 1
+
 
     except KeyboardInterrupt:
         print("\n[WARN] interrupted by user, running safe shutdown...")
